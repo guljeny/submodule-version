@@ -7,7 +7,11 @@ const yargs = require('yargs');
 const JSON_NAME = 'package.json';
 const cwd = process.cwd();
 const VERSION_REGEX = /(^.*@.*)@(.*)$/;
-const DEFAULT_DIR = 'modules';
+
+const config = {
+  dir: 'modules',
+  tag: 'master',
+};
 
 const logger = (...message) => {
   // eslint-disable-next-line no-console
@@ -18,6 +22,14 @@ const abort = (...message) => {
   logger(...message);
   yargs.exit(1, message.join(' '));
 };
+
+const configPath = path.join(cwd, '.sw.config.json');
+
+if (fs.existsSync(configPath)) {
+  const { dir, tag } = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  if (dir) config.dir = dir;
+  if (tag) config.tag = tag;
+}
 
 const readProjectJSON = () => {
   const jsonPath = path.join(cwd, JSON_NAME);
@@ -67,9 +79,9 @@ const buildGraph = (dependencies = {}, parent, location) => {
 
     if (!dependencyIsInstalled) install(url, version, location);
     const jsonString = fs.readFileSync(dependencyJSON, 'utf-8');
-    const { wv: depWV = {} } = JSON.parse(jsonString);
+    const { sv } = JSON.parse(jsonString);
 
-    buildGraph(depWV.dependencies, name, location);
+    buildGraph(sv, name, location);
   });
 };
 
@@ -87,8 +99,8 @@ const computeErrors = () => {
   return errorList.join('\n');
 };
 
-const validate = (wv, name) => {
-  buildGraph(wv.dependencies, name, wv?.dir || DEFAULT_DIR);
+const validate = (sv, name) => {
+  buildGraph(sv, name, config.dir);
   logger('Everything is up to date.');
   const errors = computeErrors();
   if (!errors) return;
@@ -96,7 +108,7 @@ const validate = (wv, name) => {
 };
 
 const checkoutModule = (url, version) => {
-  const module = isGitUrl(url) ? `${DEFAULT_DIR}/${getName(url)}` : url;
+  const module = isGitUrl(url) ? `${config.dir}/${getName(url)}` : url;
   logger('checkout', module);
   try {
     execSync(`git -C ${module} checkout ${version} -q`);
@@ -106,42 +118,39 @@ const checkoutModule = (url, version) => {
 };
 
 const validationCommand = () => {
-  const { name, wv } = readProjectJSON();
-  validate(wv, name);
+  const { name, sv } = readProjectJSON();
+  validate(sv, name);
 };
 
 const installCommand = arg => {
   const { url } = arg;
   const versionMatch = VERSION_REGEX.exec(url) || [];
-  const [, gitaddress = url, version = 'master'] = versionMatch;
+  const [, gitaddress = url, version = config.tag] = versionMatch;
 
   if (!isGitUrl(gitaddress)) {
     abort(gitaddress, 'is not a git URL');
   }
 
   const projectJSON = readProjectJSON();
-  const installedDep = projectJSON.wv?.dependencies?.[gitaddress];
+  const installedDep = projectJSON.sv?.[gitaddress];
 
   if (installedDep && installedDep !== version) {
     checkoutModule(gitaddress, version);
   }
 
-  const wv = {
-    ...(projectJSON.wv || {}),
-    dependencies: {
-      ...(projectJSON.wv?.dependencies || {}),
-      [gitaddress]: version,
-    },
+  const sv = {
+    ...(projectJSON.sv || {}),
+    [gitaddress]: version,
   };
 
   if (!installedDep || installedDep !== version) {
-    writeProjectJSON({ ...projectJSON, wv });
+    writeProjectJSON({ ...projectJSON, sv });
   }
-  validate(wv, projectJSON.name);
+  validate(sv, projectJSON.name);
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-yargs.scriptName('wv')
+yargs.scriptName('sv')
   .usage('$0 <cmd> [args]')
   .command(
     ['validate', '$0', 'v'],

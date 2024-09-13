@@ -1,12 +1,17 @@
 # Install or update
 
-`npx sw i repo.git`
-`npx sw i repo.git@1.0.0`
-`npx sw install repo.git@1.0.0`
-`npx sw i repo.git@master`
+`npx sv i repo.git`
+
+`npx sv i repo.git@1.0.0`
+
+`npx sv install repo.git@1.0.0`
+
+`npx sv i repo.git@master`
 
 # Validate
 
-`npx sw`
-`npx sw v`
-`npx sw validate`
+`npx sv`
+
+`npx sv v`
+
+`npx sv validate`
