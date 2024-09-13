@@ -99,7 +99,7 @@ const checkoutModule = (url, version) => {
   const module = isGitUrl(url) ? `${DEFAULT_DIR}/${getName(url)}` : url;
   logger('checkout', module);
   try {
-    execSync(`git -C ${module} checkout ${version}`);
+    execSync(`git -C ${module} checkout ${version} -q`);
   } catch {
     abort('Checkout failded');
   };
@@ -110,7 +110,7 @@ const validationCommand = () => {
   validate(wv, name);
 };
 
-const makeInstallCommand = arg => {
+const installCommand = arg => {
   const { url } = arg;
   const versionMatch = VERSION_REGEX.exec(url) || [];
   const [, gitaddress = url, version = 'master'] = versionMatch;
@@ -120,7 +120,7 @@ const makeInstallCommand = arg => {
   }
 
   const projectJSON = readProjectJSON();
-  const installedDep = projectJSON?.wv.dependencies?.[gitaddress];
+  const installedDep = projectJSON.wv?.dependencies?.[gitaddress];
 
   if (installedDep && installedDep !== version) {
     checkoutModule(gitaddress, version);
@@ -156,7 +156,7 @@ yargs.scriptName('wv')
       type: 'string',
       describe: 'git submodule url',
     }),
-    makeInstallCommand,
+    installCommand,
   )
   .help()
   .argv;
