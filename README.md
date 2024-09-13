@@ -1,12 +1,12 @@
 # Install or update
 
-`npx gmv i repo.git`
-`npx gmv i repo.git@1.0.0`
-`npx gmv install repo.git@1.0.0`
-`npx gmv i repo.git@master`
+`npx sw i repo.git`
+`npx sw i repo.git@1.0.0`
+`npx sw install repo.git@1.0.0`
+`npx sw i repo.git@master`
 
 # Validate
 
-`npx gmv`
-`npx gmv v`
-`npx gmv validate`
+`npx sw`
+`npx sw v`
+`npx sw validate`
