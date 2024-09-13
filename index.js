@@ -53,12 +53,23 @@ const getName = url => {
   return parts[parts.length - 1];
 };
 
+const checkout = (url, version) => {
+  const module = isGitUrl(url) ? `${config.dir}/${getName(url)}` : url;
+  logger('checkout', module);
+  try {
+    execSync(`git -C ${module} checkout ${version} -q`);
+  } catch {
+    abort('Checkout failded');
+  };
+};
+
 const install = (url, version, location) => {
   const name = getName(url);
   const targetLocation = path.join(location, name);
-  const gitCmd = `git submodule add -b ${version} ${url} ${targetLocation}`;
+  const gitCmd = `git submodule add ${url} ${targetLocation}`;
   try {
     execSync(gitCmd);
+    checkout(url, version);
   } catch {
     abort(url, 'Is not a git repo');
   }
@@ -101,20 +112,15 @@ const computeErrors = () => {
 
 const validate = (sv, name) => {
   buildGraph(sv, name, config.dir);
-  logger('Everything is up to date.');
-  const errors = computeErrors();
-  if (!errors) return;
-  abort(errors);
-};
 
-const checkoutModule = (url, version) => {
-  const module = isGitUrl(url) ? `${config.dir}/${getName(url)}` : url;
-  logger('checkout', module);
-  try {
-    execSync(`git -C ${module} checkout ${version} -q`);
-  } catch {
-    abort('Checkout failded');
-  };
+  const errors = computeErrors();
+  if (errors) abort(errors);
+
+  Object.entries(graph).forEach(([url, versions]) => {
+    checkout(url, versions[0]);
+  });
+
+  logger('Everything is up to date.');
 };
 
 const validationCommand = () => {
@@ -135,7 +141,7 @@ const installCommand = arg => {
   const installedDep = projectJSON.sv?.[gitaddress];
 
   if (installedDep && installedDep !== version) {
-    checkoutModule(gitaddress, version);
+    checkout(gitaddress, version);
   }
 
   const sv = {
