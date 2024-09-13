@@ -1,0 +1,16 @@
+node_modules
+dist
+.DS_Store
+.idea
+.vscode
+.ENV
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+coverage/
+storybook-static
+
+npm-debug.log*
+/Integration/.vs
+/.vs
