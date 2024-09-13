@@ -117,7 +117,7 @@ const validate = (sv, name) => {
   if (errors) abort(errors);
 
   Object.entries(graph).forEach(([url, versions]) => {
-    checkout(url, versions[0]);
+    checkout(`${config.dir}/${url}`, versions[0]);
   });
 
   logger('Everything is up to date.');
