@@ -55,7 +55,7 @@ const getName = url => {
 
 const checkout = (url, version) => {
   const module = isGitUrl(url) ? `${config.dir}/${getName(url)}` : url;
-  logger('checkout', module);
+  logger('Verify or update', module, 'version');
   try {
     execSync(`git -C ${module} checkout ${version} -q`);
   } catch {
@@ -116,8 +116,8 @@ const validate = (sv, name) => {
   const errors = computeErrors();
   if (errors) abort(errors);
 
-  Object.entries(graph).forEach(([url, versions]) => {
-    checkout(`${config.dir}/${url}`, versions[0]);
+  Object.entries(graph).forEach(([moduleName, versions]) => {
+    checkout(`${config.dir}/${moduleName}`, Object.keys(versions)[0]);
   });
 
   logger('Everything is up to date.');
