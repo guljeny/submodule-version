@@ -1,20 +1,30 @@
 {
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
-  "version": "1.1.4",
+  "version": "2.0.0",
   "bin": {
-    "sv": "index.js"
+    "sv": "dist/index.js",
+    "sv-dev": "index-dev.ts"
   },
   "scripts": {
-    "lint": "npx eslint"
+    "prepare": "npm build",
+    "test": "npx jest",
+    "build": "npx tsc",
+    "lint": "npx eslint ./src"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/jest": "^29.5.13",
     "eslint": "9.9.1",
-    "eslint-config-soft": "^1.0.5"
+    "eslint-config-soft": "^1.0.5",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2"
   },
   "dependencies": {
+    "chalk": "^4.1.2",
+    "jest": "^29.7.0",
+    "typescript": "^5.6.2",
     "yargs": "^17.7.2"
   }
 }
