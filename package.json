@@ -1,13 +1,13 @@
 {
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "bin": {
     "sv": "dist/index.js",
     "sv-dev": "index-dev.ts"
   },
   "scripts": {
-    "prepare": "npm build",
+    "prepare": "npm run build",
     "test": "npx jest",
     "build": "npx tsc",
     "lint": "npx eslint ./src"

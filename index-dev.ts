@@ -1,6 +1,7 @@
 #!/usr/bin/env ts-node
 
 import chalk from 'chalk';
+import { log } from './src/log';
 
-console.log(chalk.bgRed.white.bold(' RUNNED IN DEV MODE '));
+log.message(chalk.bgRed.white.bold(' RUNNED IN DEV MODE '));
 import './src/submoduleVersion';

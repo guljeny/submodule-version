@@ -1,3 +1,4 @@
+import chalk from 'chalk';
 import { execSync } from 'child_process';
 import path from 'path';
 import { config } from './config';
@@ -16,9 +17,11 @@ const addSumbmodule = (url: string) => {
   }
 };
 
-const checkout = (url: string, version: string) => {
-  const { name } = parseGitUrl(url);
+const checkout = (name: string, version: string) => {
   const module = path.join(config.dir, name);
+  const styledName = chalk.green.bold(name);
+  const styledVer = chalk.green.bold(version);
+  log.message('Checkout', styledName, 'to', styledVer);
 
   try {
     execSync(`git -C ${module} checkout ${version} -q`);

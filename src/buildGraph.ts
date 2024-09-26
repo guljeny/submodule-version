@@ -17,7 +17,14 @@ interface ITreeEntry {
 
 type TBaseTree = Record<string, ITreeEntry>;
 
-export const buildGraph = () => {
+export interface IGraphEntry {
+  versions: string[];
+  parents: Record<string, string>;
+  used: string[];
+  version: string;
+}
+
+export const buildGraph = (): Record<string, IGraphEntry> | void => {
   const baseJson = pkgJsonUtil.read();
   const baseTree: TBaseTree = {};
 
