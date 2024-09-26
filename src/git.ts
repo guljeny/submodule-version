@@ -24,6 +24,7 @@ const checkout = (name: string, version: string) => {
   log.message('Checkout', styledName, 'to', styledVer);
 
   try {
+    execSync(`git -C ${module} fetch`);
     execSync(`git -C ${module} checkout ${version} -q`);
   } catch {
     log.error('Checkout failded');
@@ -32,6 +33,7 @@ const checkout = (name: string, version: string) => {
 
 const listVersions = (projectName: string) => {
   const module = path.join(config.dir, projectName);
+  execSync(`git -C ${module} fetch`);
   const res = execSync(`git -C ${module} tag -l`);
   const tagList = res.toString().split(/\r?\n/);
 

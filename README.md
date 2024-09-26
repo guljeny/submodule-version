@@ -1,17 +1,60 @@
-# Install or update
+# Submodule version
 
-`npx sv i repo.git`
+## Git **S**ubmodule **V**ersion tool
 
-`npx sv i repo.git@1.0.0`
+[![NPM](https://nodei.co/npm/submodule-version.png?mini=true)](https://www.npmjs.com/package/submodule-version)
 
-`npx sv install repo.git@1.0.0`
+`Submodule version` is a tool to manage git submodules as versioned packages.
 
-`npx sv i repo.git@master`
+This tool designet to split projects in-to submodules *without npm-packages headache*.
 
-# Validate
+With `submodule version` code can be organized like a *single monorepo*, but each submodule can be *easily reused* in another projects like npm-package.
 
-`npx sv`
+## Problem to solve
 
-`npx sv v`
+Take a look on the next situation:
 
-`npx sv validate`
+- Project has 2 submodules `ui-button-element` and `render-engine`
+- Package `ui-button-element` dependents on the `render-engine`
+- Third repo `ui-slider-element` dependets on newest version of the `render-engine`
+
+This cause next problems:
+
+- Add `ui-slider-element` cause difficulties with handle different `render-engine` versions
+- How to update `ui-button-element` if it's repo contains new version?
+
+Submodule version helps to
+
+- Take a look which project should be updated and which version should be installed
+- Help update submodules and theirs dependencies
+- Install new submodules
+
+## Installation
+
+- Install sv tool `npm i -D submodule-version`
+- Add `workspaces` section in `package.json`
+  ```
+    "workspaces": [
+        "modules/*"
+    ],
+  ```
+- Install first submodule `npx sv i <git_repo>`
+- Install npm dependencies `npm i`. Submodule will be linked in node_modules and its dependencies will be installed
+- Use your submodule in code `import submodule from 'submodule-name'` 🔥
+
+## How it works
+
+- Each submodule and main project has own `package.json` with `sv` object inside. `sv` object will be generated automatically and will contain every dependency version
+  ```
+  "sv": {
+      "git@github.com:guljeny/submodule-version.git": "^1.0.0"
+  }
+  ```
+- `Submodule version` creates a graph of whole project and install only possible and actual versions
+
+## Commands
+
+- `sv validate` - Validate all dependencis and install missing modules
+- `sv install <git_url> [target_submodule]` - Install new dependency
+- `sv update` - Update all dependencies to the latest possible versions
+- `sv help` - Description of all commands
