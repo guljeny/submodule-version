@@ -2,6 +2,7 @@
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
   "version": "2.0.3",
+  "repository": "github:guljeny/submodule-version",
   "bin": {
     "sv": "dist/index.js",
     "sv-dev": "index-dev.ts"
@@ -12,7 +13,14 @@
     "build": "npx tsc",
     "lint": "npx eslint ./src"
   },
-  "author": "",
+  "author": "Yauheni Hul",
+  "keywords": [
+    "git",
+    "submodules",
+    "sv",
+    "version",
+    "version control"
+  ],
   "license": "ISC",
   "devDependencies": {
     "@types/jest": "^29.5.13",

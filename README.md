@@ -16,7 +16,7 @@ Take a look on the next situation:
 
 - Project has 2 submodules `ui-button-element` and `render-engine`
 - Package `ui-button-element` dependents on the `render-engine`
-- Third repo `ui-slider-element` dependets on newest version of the `render-engine` and not include in the project
+- Third repo `ui-slider-element` dependets on newest version of the `render-engine` and not included in the project
 
 This cause next problems:
 
