@@ -6,7 +6,7 @@
 
 `Submodule version` is a tool to manage git submodules as versioned packages.
 
-This tool designet to split projects in-to submodules *without npm-packages headache*.
+This tool designed to split projects in-to submodules *without npm-packages headache*.
 
 With `submodule version` code can be organized like a *single monorepo*, but each submodule can be *easily reused* in another projects like npm-package.
 
@@ -16,16 +16,17 @@ Take a look on the next situation:
 
 - Project has 2 submodules `ui-button-element` and `render-engine`
 - Package `ui-button-element` dependents on the `render-engine`
-- Third repo `ui-slider-element` dependets on newest version of the `render-engine`
+- Third repo `ui-slider-element` dependets on newest version of the `render-engine` and not include in the project
 
 This cause next problems:
 
-- Add `ui-slider-element` cause difficulties with handle different `render-engine` versions
-- How to update `ui-button-element` if it's repo contains new version?
+- Add submodule `ui-slider-element` cause difficulties with handle different `render-engine` versions
+- Manual swithing branches in submodules with big codebase can confuse
+- Updated `ui-button-element` with new version of `render-engine` should be used in another project with the same version
 
 Submodule version helps to
 
-- Take a look which project should be updated and which version should be installed
+- Handle which project should be updated and which version should be installed
 - Help update submodules and theirs dependencies
 - Install new submodules
 
@@ -50,11 +51,27 @@ Submodule version helps to
       "git@github.com:guljeny/submodule-version.git": "^1.0.0"
   }
   ```
+- Each submodule has a [version](#versioning) tags, and `sv` use list of this tags to resolve dependencies
 - `Submodule version` creates a graph of whole project and install only possible and actual versions
+
+## Versioning
+
+Sumodules without specified version tags will be installed with ref to the latest commit. You should manage them manually.
+
+To add new version in submodule:
+- Specify version in `package.json`
+- Add and push git tag with the same version (`git tag 1.0.1`)
+
 
 ## Commands
 
-- `sv validate` - Validate all dependencis and install missing modules
-- `sv install <git_url> [target_submodule]` - Install new dependency
-- `sv update` - Update all dependencies to the latest possible versions
-- `sv help` - Description of all commands
+- `npx sv validate` - Validate all dependencis and install missing modules
+- `npx sv install <git_url> [target_submodule]` - Install new dependency
+- `npx sv update` - Update all dependencies to the latest possible versions
+- `npx sv help` - Description of all commands
+
+## Submodule dependencies 
+
+Sumbodules can contains their own dependencies specified in `package.json` as `sv` object.
+
+To install submodule in submodule run `npx install <git_url> [target_submodule]`

@@ -1,7 +1,7 @@
 {
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "bin": {
     "sv": "dist/index.js",
     "sv-dev": "index-dev.ts"

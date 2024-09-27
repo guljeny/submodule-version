@@ -71,7 +71,7 @@ const latest = (versions: string[]) => (
 
       return v2Val - v1Val;
     }, 0);
-  })[0])
+  })[0] || '')
 );
 
 export const versionUtil = {

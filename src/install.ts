@@ -32,7 +32,7 @@ export const install = (arg: any) => {
   const latestVersion = versionUtil.latest(versions);
   const requestedVersion = version || latestVersion;
 
-  if (!versions.includes(requestedVersion)) {
+  if (!versions.includes(requestedVersion) && versions.length) {
     const styledName = `Package ${chalk.bold.green(name)}`;
     const styledVer = chalk.bgRed.bold.white(` ${requestedVersion} `);
     const errMsg = `does not contain version ${styledVer}.`;
@@ -41,7 +41,7 @@ export const install = (arg: any) => {
     log.error(styledName, errMsg, helpMsg);
   }
 
-  targetPkg.sv[url] = `^${requestedVersion}`;
+  targetPkg.sv[url] = requestedVersion ? `^${requestedVersion}` : '*';
   pkgJsonUtil.write(targetPkg, target);
   buildGraph();
 };

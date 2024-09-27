@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { config } from './config';
 import chalk from 'chalk';
 import { pkgJsonUtil } from './pkgJsonUtil';
 import { log } from './log';
@@ -31,26 +34,34 @@ export const buildGraph = (): Record<string, IGraphEntry> | void => {
   if (!baseJson) return log.error('Not a npm project');
   if (!baseJson.sv) return log.message('There is no dependencies');
 
+  // First pass of graph creation. Read and validate data w/o networking
   const recursiveBuilder = (dependencies: TSV = {}, parent = '*') => {
     Object.entries(dependencies).forEach(([url, version]) => {
       const { name } = parseGitUrl(url);
-      const jsonPath = pkgJsonUtil.getPkgJsonPath(name);
-      if (!versionUtil.validate(version, true)) {
-        const em = `<${version}> for [${name}] in [${parent}]`;
+      const moduleDir = path.join(process.cwd(), config.dir, name);
+      const isInstalled = fs.existsSync(moduleDir);
 
-        return log.error('Unknown version', em);
+      if (version && !versionUtil.validate(version, true)) {
+        const stV = chalk.bgRed.bold.white(` ${version} `);
+        const stName = chalk.red.bold(name);
+        const stParent = chalk.green.bold(parent);
+
+        return log.error('Unknown version', stV, 'for', stName, 'in', stParent);
       }
-      if (!jsonPath) {
+
+      if (!isInstalled) {
         git.addSumbmodule(url);
       }
 
-      const exists = baseTree[name] || null;
-      const mJson = exists ? null : pkgJsonUtil.read(name);
+      const existEntry = baseTree[name] || null;
+      const mJson = existEntry ? null : pkgJsonUtil.read(name);
 
-      if (!version) return log.error('Module', name, 'not installed');
+      const meta = {
+        version: existEntry?.meta.version || mJson?.version || version || '*',
+        sv: existEntry?.meta.sv || mJson?.sv || {},
+      };
 
-      const meta = exists?.meta || { version: mJson.version, sv: mJson.sv };
-      const parents = exists?.parents || {};
+      const parents = existEntry?.parents || {};
 
       baseTree[name] = {
         meta,
@@ -71,7 +82,8 @@ export const buildGraph = (): Record<string, IGraphEntry> | void => {
       versionUtil.pick(selective, v)
     ), versions);
 
-    if (!used.length) {
+    // No comatible version found and module has version tags
+    if (!used.length && versions.length) {
       const longestVersion = Object.values(parents).reduce((len, v) => (
         v.length > len ? v.length : len
       ), 0);
@@ -92,7 +104,16 @@ export const buildGraph = (): Record<string, IGraphEntry> | void => {
     }
 
     if (!used.includes(meta.version)) {
-      git.checkout(name, versionUtil.latest(used));
+      const latest = versionUtil.latest(used);
+      if (latest) {
+        git.checkout(name, versionUtil.latest(used));
+      } else {
+        log.message(
+          chalk.yellow('⚠️  WARN: Module'),
+          chalk.bgYellow.black(` ${name} `),
+          chalk.yellow('does not contain any version tag!'),
+        );
+      }
     }
 
     return {
