@@ -3,6 +3,7 @@
   "description": "Git <S>ubmodule <V>ersioning tool",
   "version": "2.0.4",
   "repository": "github:guljeny/submodule-version",
+  "main": "dist/src/sv.js",
   "bin": {
     "sv": "dist/index.js",
     "sv-dev": "index-dev.ts"
@@ -10,7 +11,7 @@
   "scripts": {
     "prepare": "npm run build",
     "test": "npx jest",
-    "build": "npx tsc",
+    "build": "rm -rf ./dist && npx tsc",
     "lint": "npx eslint ./src"
   },
   "author": "Yauheni Hul",

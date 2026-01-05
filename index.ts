@@ -1,3 +1,3 @@
 #!/usr/bin/env node
 
-import './src/submoduleVersion';
+import './src/runner';

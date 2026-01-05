@@ -1,4 +1,4 @@
-interface IParseResult {
+export interface IParseResult {
   name: string;
   url: string;
   version: string | null;
