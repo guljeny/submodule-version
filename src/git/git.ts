@@ -16,14 +16,14 @@ export const git = {
     const { name } = parseGitUrl(url);
     const module = path.join(RunOptions.modulesDir, name);
 
-    try {
+    // try {
       await execAsync(
         `git submodule add ${url} ${module}`,
         { cwd: RunOptions.cwd },
       );
-    } catch {
-      log.error(url, 'Is not a git repo');
-    }
+    // } catch {
+    //   log.error(url, 'Is not a git repo', RunOptions.cwd);
+    // }
   },
 
   checkout: async (name: string, version: string): Promise<void> => {
