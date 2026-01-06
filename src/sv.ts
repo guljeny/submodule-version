@@ -65,8 +65,23 @@ export class SV {
     }));
   };
 
-  public remove = async (submoduleName: string) => {
+  public remove = async (submoduleName: string, parentModule?: string) => {
     await git.rm(submoduleName);
+    const json = await this.pkgJSONManager.read(parentModule);
+
+    if (!json.sv) return;
+
+    const sv = Object.keys(json.sv).reduce((acc, k) => {
+      if (k.endsWith(`${submoduleName}.git`)) {
+        return acc;
+      }
+
+      return { ...acc, [k]: json.sv[k] };
+    }, {});
+
+    json.sv = sv;
+
+    await this.pkgJSONManager.write(json, parentModule);
     await this.graph.build();
   };
 }

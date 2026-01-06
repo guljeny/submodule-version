@@ -57,12 +57,15 @@ export const git = {
   },
 
   rm: async (submoduleName: string) => {
+    const modulePath = path.join(RunOptions.modulesDir, submoduleName);
+
     await execAsync(
-      `git rm -f ${RunOptions.modulesDir}/${submoduleName}`,
+      `git rm -f ${modulePath}`,
       { cwd: RunOptions.cwd },
     );
+
     await execAsync(
-      `rm -rf .git/${RunOptions.modulesDir}/${submoduleName}`,
+      `rm -rf ${path.join('.git/modules', modulePath)}`,
       { cwd: RunOptions.cwd },
     );
   },
