@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import yargs from 'yargs';
-import { SV } from '../sv';
-import { log } from '../log';
+import { SV } from '../src';
+import { log } from './log';
 import { handleErrors } from './handleErrors';
 
 const BASE_DIR = 'modules';
@@ -29,6 +29,11 @@ const update = makeEvent(async sv => {
   await sv.update();
 });
 
+const remove = makeEvent(async (sv, arg) => {
+  const { name } = arg as {name: string};
+  await sv.remove(name);
+});
+
 const validate = makeEvent(async sv => {
   const result = await sv.buildGraph();
 
@@ -46,7 +51,7 @@ const validate = makeEvent(async sv => {
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-yargs.scriptName('sv')
+export const s = yargs.scriptName('sv')
   .usage('$0 <cmd> [args]')
   .command(
     ['validate', '$0', 'v'],
@@ -71,6 +76,15 @@ yargs.scriptName('sv')
       describe: 'Target module name',
     }),
     install,
+  )
+  .command(
+    ['remove <name>', 'r'],
+    'Remove submodule by name',
+    y => y.positional('name', {
+      type: 'string',
+      describe: 'Submodule name',
+    }),
+    remove,
   )
   .help()
   .argv;

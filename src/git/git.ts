@@ -1,11 +1,10 @@
-import chalk from 'chalk';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
-import { log } from '../log';
 import { parseGitUrl } from './parseGitUrl';
 import { versionUtil } from '../versionUtil';
 import { RunOptions } from '../runOptions';
+import { GitError } from './GitError';
 
 const execAsync = promisify(exec);
 
@@ -16,36 +15,31 @@ export const git = {
     const { name } = parseGitUrl(url);
     const module = path.join(RunOptions.modulesDir, name);
 
-    // try {
+    try {
       await execAsync(
         `git submodule add ${url} ${module}`,
         { cwd: RunOptions.cwd },
       );
-    // } catch {
-    //   log.error(url, 'Is not a git repo', RunOptions.cwd);
-    // }
+    } catch {
+      throw new GitError('GIT_NOT_A_REPO');
+    }
   },
 
   checkout: async (name: string, version: string): Promise<void> => {
     const module = path.join(RunOptions.modulesDir, name);
-    const styledName = chalk.green.bold(name);
-    const styledVer = chalk.green.bold(version);
 
     try {
-      log.message('Checkout', styledName, 'to', styledVer);
       await execAsync(
         `git -C ${module} checkout ${version} -q`,
         { cwd: RunOptions.cwd },
       );
     } catch {
-      log.error('Checkout failded');
+      throw new GitError('GIT_MODULE_CHECKOUT_FAILED');
     }
   },
 
   listVersions: async (projectName: string): Promise<string[]> => {
     const module = path.join(RunOptions.modulesDir, projectName);
-    const styledName = chalk.green.bold(projectName);
-    log.message('Fetching tag list for', styledName);
     await execAsync(`git -C ${module} fetch --tags`, { cwd: RunOptions.cwd });
 
     const res = await execAsync(
@@ -60,5 +54,16 @@ export const git = {
 
       return versionUtil.validate(tag);
     });
+  },
+
+  rm: async (submoduleName: string) => {
+    await execAsync(
+      `git rm -f ${RunOptions.modulesDir}/${submoduleName}`,
+      { cwd: RunOptions.cwd },
+    );
+    await execAsync(
+      `rm -rf .git/${RunOptions.modulesDir}/${submoduleName}`,
+      { cwd: RunOptions.cwd },
+    );
   },
 };

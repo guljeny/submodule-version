@@ -21,7 +21,7 @@
   },
   "include": [
     "src/**/*",
-    "index.ts"
+    "runner/**/*"
   ],
   "exclude": [
     "node_modules",

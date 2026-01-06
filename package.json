@@ -1,12 +1,12 @@
 {
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "repository": "github:guljeny/submodule-version",
   "main": "dist/src/index.js",
   "bin": {
-    "sv": "dist/index.js",
-    "sv-dev": "index-dev.ts"
+    "sv": "dist/runner/index.js",
+    "sv-dev": "runner/index-dev.ts"
   },
   "scripts": {
     "prepare": "npm run build",

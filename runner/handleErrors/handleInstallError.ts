@@ -1,7 +1,7 @@
 import chalk from 'chalk';
-import { versionUtil } from "../../versionUtil";
-import { log } from '../../log';
-import { git } from '../../git';
+import { versionUtil } from "../../src/versionUtil";
+import { log } from '../log';
+import { git } from '../../src/git';
 
 export const handleInstallError = async (error: Error, gitUrl: string) => {
   const { message } = error;

@@ -64,4 +64,9 @@ export class SV {
       }
     }));
   };
+
+  public remove = async (submoduleName: string) => {
+    await git.rm(submoduleName);
+    await this.graph.build();
+  };
 }

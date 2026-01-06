@@ -1,5 +1,5 @@
-import { GraphError } from '../../Graph';
-import { log } from '../../log';
+import { GraphError } from '../../src/Graph';
+import { log } from '../log';
 import chalk from 'chalk';
 
 export const handleBuildGraphError = (error: Error) => {
