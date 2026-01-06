@@ -19,39 +19,25 @@ const getJsonPath = async (submoduleName?: string): Promise<TJSONPath> => {
   return jsonPath;
 };
 
-export class PkgJSONManager {
-  private cache: Map<string, any> = new Map();
-
+export const pkgJSONManager = {
   /* Reads package.json in project folder or in submodule */
-  public read = async (submoduleName?: string) => {
+  read: async (submoduleName?: string) => {
     const jsonPath = await getJsonPath(submoduleName);
 
     if (!jsonPath) return null;
 
-    if (this.cache.has(jsonPath)) {
-      return this.cache.get(jsonPath);
-    }
-
     const jsonString = await readFileAsync(jsonPath, 'utf-8');
     const parsed = JSON.parse(jsonString);
 
-    this.cache.set(jsonPath, parsed);
-
     return parsed;
-  };
+  },
 
   /* Writes package.json in project folder or in submodule */
-  public write = async (data: Object, submoduleName?: string) => {
+  write: async (data: Object, submoduleName?: string) => {
     const jsonPath = await getJsonPath(submoduleName);
 
     if (!jsonPath) return;
 
-    this.cache.set(jsonPath, data);
-
     await writeFileAsync(jsonPath, JSON.stringify(data, null, 2));
-  };
-
-  public clearCache (): void {
-    this.cache.clear();
-  }
-}
+  },
+};

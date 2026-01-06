@@ -1,2 +1,2 @@
-export { Graph } from './Graph';
+export { buildGraph } from './buildGraph';
 export { GraphError } from './GraphError';

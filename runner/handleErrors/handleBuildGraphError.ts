@@ -1,4 +1,4 @@
-import { GraphError } from '../../src/Graph';
+import { GraphError } from '../../src/buildGraph';
 import { log } from '../log';
 import chalk from 'chalk';
 

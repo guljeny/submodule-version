@@ -1,26 +1,21 @@
-import { PkgJSONManager } from "./PkgJSONManager";
-import { Graph } from "./Graph";
+import { pkgJSONManager } from "./pkgJSONManager";
+import { buildGraph } from "./buildGraph";
 import { RunOptions } from "./runOptions";
 import { versionUtil } from "./versionUtil";
 import { git } from "./git";
 
 export class SV {
-  private pkgJSONManager: PkgJSONManager;
-  private graph: Graph;
-
   constructor (
     projectDir: string,
     modulesDir: string = 'addons',
   ) {
     RunOptions.cwd = projectDir;
     RunOptions.modulesDir = modulesDir;
-
-    this.pkgJSONManager = new PkgJSONManager();
-    this.graph = new Graph(this.pkgJSONManager);
   }
 
-  public buildGraph = () => this.graph.build();
+  public buildGraph = buildGraph;
 
+  // eslint-disable-next-line class-methods-use-this
   public install = async (gitUrl: string, parentModule?: string) => {
     const { url, version, name } = git.parseUrl(gitUrl);
 
@@ -28,12 +23,12 @@ export class SV {
       throw new Error('NOT_A_GIT_URL');
     }
 
-    const targetPkg = await this.pkgJSONManager.read(parentModule);
-    let installedPkg = await this.pkgJSONManager.read(name);
+    const targetPkg = await pkgJSONManager.read(parentModule);
+    let installedPkg = await pkgJSONManager.read(name);
 
     if (!installedPkg) {
       await git.addSumbmodule(url);
-      installedPkg = this.pkgJSONManager.read(name);
+      installedPkg = pkgJSONManager.read(name);
     }
 
     const versions = await git.listVersions(name);
@@ -49,12 +44,13 @@ export class SV {
     }
 
     targetPkg.sv[url] = requestedVersion ? `^${requestedVersion}` : '*';
-    await this.pkgJSONManager.write(targetPkg, parentModule);
-    await this.graph.build();
+    await pkgJSONManager.write(targetPkg, parentModule);
+    await buildGraph();
   };
 
+  // eslint-disable-next-line class-methods-use-this
   public update = async () => {
-    const graph = await this.graph.build();
+    const graph = await buildGraph();
     if (!graph) return;
     await Promise.all(Object.entries(graph).map(async ([name, data]) => {
       const { version, used } = data;
@@ -65,13 +61,14 @@ export class SV {
     }));
   };
 
+  // eslint-disable-next-line class-methods-use-this
   public remove = async (submoduleName: string, parentModule?: string) => {
     await git.rm(submoduleName);
-    const json = await this.pkgJSONManager.read(parentModule);
+    const json = await pkgJSONManager.read(parentModule);
 
     if (!json.sv) return;
 
-    const sv = Object.keys(json.sv).reduce((acc, k) => {
+    json.sv = Object.keys(json.sv).reduce((acc, k) => {
       if (k.endsWith(`${submoduleName}.git`)) {
         return acc;
       }
@@ -79,9 +76,7 @@ export class SV {
       return { ...acc, [k]: json.sv[k] };
     }, {});
 
-    json.sv = sv;
-
-    await this.pkgJSONManager.write(json, parentModule);
-    await this.graph.build();
+    await pkgJSONManager.write(json, parentModule);
+    await buildGraph();
   };
 }
