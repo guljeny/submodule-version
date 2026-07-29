@@ -58,3 +58,20 @@ describe('Compare', () => {
     expect(versionUtil.compare([1, 2, 3], [1, 2, 4], 2)).toBe(false);
   });
 });
+
+describe('Bump', () => {
+  it('Release', () => {
+    expect(versionUtil.bump('0.0.0', 'release')).toBe('0.0.1');
+    expect(versionUtil.bump('1.2.3', 'release')).toBe('1.2.4');
+  });
+
+  it('Minor', () => {
+    expect(versionUtil.bump('0.0.0', 'minor')).toBe('0.1.0');
+    expect(versionUtil.bump('1.2.3', 'minor')).toBe('1.3.0');
+  });
+
+  it('Major', () => {
+    expect(versionUtil.bump('0.0.0', 'major')).toBe('1.0.0');
+    expect(versionUtil.bump('1.2.3', 'major')).toBe('2.0.0');
+  });
+});

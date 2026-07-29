@@ -74,9 +74,22 @@ const latest = (versions: string[]) => (
   })[0] || '')
 );
 
+const bump = (
+  version: string,
+  kind: 'release' | 'minor' | 'major',
+): string => {
+  const [major, minor, patch] = toArray(version);
+
+  if (kind === 'major') return `${major + 1}.0.0`;
+  if (kind === 'minor') return `${major}.${minor + 1}.0`;
+
+  return `${major}.${minor}.${patch + 1}`;
+};
+
 export const versionUtil = {
   compare,
   pick,
   validate,
   latest,
+  bump,
 };

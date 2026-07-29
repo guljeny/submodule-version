@@ -22,6 +22,7 @@ export interface IGraphEntry {
   versions: string[];
   parents: Record<string, string>;
   used: string[];
+  allowedVersions: string[];
   version: string;
 }
 
@@ -91,21 +92,53 @@ export const buildGraph = async (): Promise<Record<string, IGraphEntry>> => {
         versionUtil.pick(selective, v)
       ), versions);
 
+      const allowedVersions = Object.entries(parents)
+        .filter(([parent]) => parent !== baseJson.name)
+        .reduce((selective, [, v]) => (
+          versionUtil.pick(selective, v)
+        ), versions);
+
       // No compatible version found and module has version tags
       if (!used.length && versions.length) {
         throw new GraphError('VERSION_CONFLICT', { parents, name });
       }
 
-      if (!used.includes(meta.version)) {
+      /**
+       * Текущая версия — тег, на котором реально стоит HEAD. Сравнивать с
+       * package.json нельзя: его version не обязан совпадать с тегами,
+       * и такое сравнение отрывает HEAD (checkout на тег) при каждом buildGraph
+       * Checkout делаем только на чистой копии без локальной работы:
+       * незакоммиченные изменения или незапушенные коммиты
+       * важнее резолва версий.
+       */
+      const current = await git.currentVersion(name);
+
+      if (!current || !used.includes(current)) {
         const latest = versionUtil.latest(used);
-        if (latest) {
+
+        const moduleDir = path.join(
+          RunOptions.cwd,
+          RunOptions.modulesDir,
+          name,
+        );
+
+        const [hasChanges, hasUnpushed] = await Promise.all([
+          git.hasChanges(moduleDir),
+          git.hasUnpushedCommits(moduleDir),
+        ]);
+
+        const allChangesDone = !hasChanges && !hasUnpushed;
+
+        if (latest && latest !== current && allChangesDone) {
           await git.checkout(name, latest);
         }
       }
 
+      const version = current || meta.version;
+
       return {
         name,
-        data: { versions, parents, used, version: meta.version },
+        data: { versions, parents, used, allowedVersions, version },
       };
     }),
   );
