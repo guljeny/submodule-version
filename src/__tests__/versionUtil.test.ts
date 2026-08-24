@@ -45,6 +45,11 @@ describe('Compare', () => {
     expect(versionUtil.compare([1, 3, 3], [1, 2, 4], 0)).toBe(false);
     expect(versionUtil.compare([1, 2, 3], [1, 2, 4], 1)).toBe(true);
     expect(versionUtil.compare([1, 2, 4], [1, 2, 3], 1)).toBe(false);
+    // Higher minor allows lower patch: 0.3.0 fits ^0.2.6
+    expect(versionUtil.compare([0, 2, 6], [0, 3, 0], 0)).toBe(true);
+    expect(versionUtil.compare([0, 2, 6], [0, 2, 5], 0)).toBe(false);
+    expect(versionUtil.compare([0, 2, 6], [0, 2, 6], 0)).toBe(true);
+    expect(versionUtil.compare([0, 2, 6], [1, 3, 0], 0)).toBe(false);
   });
 
   it('Minor mode', () => {
@@ -56,6 +61,20 @@ describe('Compare', () => {
     expect(versionUtil.compare([1, 2, 3], [1, 2, 3], 2)).toBe(true);
     expect(versionUtil.compare([1, 2, 4], [1, 2, 3], 2)).toBe(false);
     expect(versionUtil.compare([1, 2, 3], [1, 2, 4], 2)).toBe(false);
+  });
+});
+
+describe('Pick', () => {
+  it('Caret range includes higher minors', () => {
+    const versions = ['0.2.5', '0.2.6', '0.2.8', '0.3.0', '1.0.0'];
+
+    expect(versionUtil.pick(versions, '^0.2.6')).toEqual(['0.2.6', '0.2.8', '0.3.0']);
+  });
+
+  it('Tilde range keeps minor pinned', () => {
+    const versions = ['1.2.3', '1.2.10', '1.3.0'];
+
+    expect(versionUtil.pick(versions, '~1.2.3')).toEqual(['1.2.3', '1.2.10']);
   });
 });
 

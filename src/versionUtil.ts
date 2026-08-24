@@ -25,16 +25,18 @@ const compare = (
   actualVer: number[],
   compareMode: ComapreMode,
 ) => {
-  const val = new Array(3).fill(null).reduce((acc, _, i) => {
-    // Alrady is not compatible
-    if (!acc) return acc;
-    // Mode not include comparation, version should be same or hier
-    if (i > compareMode) return actualVer[i] >= baseVer[i];
+  // Components pinned by the mode must match exactly
+  for (let i = 0; i <= compareMode; i++) {
+    if (baseVer[i] !== actualVer[i]) return false;
+  }
 
-    return baseVer[i] === actualVer[i];
-  }, true);
+  // The rest must be same or higher, compared from most significant:
+  // a higher minor allows any patch (0.3.0 fits ^0.2.6)
+  for (let i = compareMode + 1; i < 3; i++) {
+    if (actualVer[i] !== baseVer[i]) return actualVer[i] > baseVer[i];
+  }
 
-  return val;
+  return true;
 };
 
 const pick = (allVersions: string[], v: string) => {
