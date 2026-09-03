@@ -213,6 +213,35 @@ export class SV {
     return !!(await this.getRemote(module));
   };
 
+  /*
+   * Remote-ветка впереди локальной (fetch + rev-list HEAD..@{u}).
+   * Нет репозитория/remote/upstream — обновлений нет.
+   */
+  // eslint-disable-next-line class-methods-use-this
+  public isRemoteAhead = async (module?: string): Promise<boolean> => {
+    const dir = module
+      ? path.join(RunOptions.modulesDir, module)
+      : RunOptions.cwd;
+
+    if (!await git.isGitRepo(dir)) return false;
+
+    return git.isRemoteAhead(dir);
+  };
+
+  /*
+   * Догоняем remote: pull --rebase --autostash. При конфликте всё
+   * восстанавливается как было (rebase --abort + stash pop) и кидается
+   * GIT_SYNC_CONFLICT — дальше возможен только ручной ребейз.
+   */
+  // eslint-disable-next-line class-methods-use-this
+  public pullRebaseAutostash = async (module?: string): Promise<void> => {
+    const dir = module
+      ? path.join(RunOptions.modulesDir, module)
+      : RunOptions.cwd;
+
+    return git.pullRebaseAutostash(dir);
+  };
+
   public publish = async (opts: {
     module?: string,
     repoUrl?: string,

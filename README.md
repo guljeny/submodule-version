@@ -100,6 +100,11 @@ const sv = new SV(process.cwd(), 'modules');
 - `sv.getRemote(module?)` - The `origin` remote URL, or `null`
 - `sv.isPublished(module?)` - `true` if the module is a git repo with a configured remote
 
+### Syncing with the remote
+
+- `sv.isRemoteAhead(module?)` - `true` if the remote branch has commits the local one does not (fetches from `origin` first)
+- `sv.pullRebaseAutostash(module?)` - Catch up with the remote via `pull --rebase --autostash`. On conflict everything is restored to the previous state (`rebase --abort` + `stash pop`) and a `GIT_SYNC_CONFLICT` error is thrown — further sync is only possible with a manual rebase
+
 ### Publishing
 
 - `sv.publish({ module?, repoUrl?, message?, bump })` - Commit, tag and push a new version of a module (or the project itself). Returns the published version.
