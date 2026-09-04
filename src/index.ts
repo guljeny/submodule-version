@@ -4,6 +4,7 @@ export { PubGrub, pubGrub } from './PubGrub';
 export type {
   IEntrySource,
   IIncompatibility,
+  IOverride,
   IPackageEntry,
   IRequirement,
   IResolvedPackage,
@@ -11,7 +12,8 @@ export type {
   TDependencies,
   TPubGrubResult,
 } from './PubGrub';
-export { entryStore } from './entryStore';
-export { github, GithubError } from './github';
+export { EntryStore, entryStore } from './entryStore';
+export { printError } from './printError';
+export { git, GitError, GithubError } from './git';
 export { SVError, ERR } from './errors';
 export type { TSVErrorCode, TSVErrorDetails } from './errors';

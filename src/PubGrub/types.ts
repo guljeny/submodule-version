@@ -17,6 +17,17 @@ export interface IEntrySource {
   fetch(depPath: string): Promise<IPackageEntry>;
 }
 
+/*
+ * Потенциальное изменение дерева зависимостей на время entryStore.simulate.
+ * Без parent — root (применяется к rootDependencies самим вызывающим кодом).
+ */
+export interface IOverride {
+  parent?: string;
+  add?: string;
+  version?: string;
+  delete?: string;
+}
+
 export interface IRequirement {
   range: string;
   positive: boolean;

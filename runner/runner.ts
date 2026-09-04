@@ -1,54 +1,106 @@
 import chalk from 'chalk';
 import yargs from 'yargs';
-import { SV } from '../src';
+import { SV, SVError } from '../src';
 import { log } from './log';
 import { handleErrors } from './handleErrors';
 
-const BASE_DIR = 'modules';
+/* 'A.B.C' → { name: 'C', parent: 'B' } (parent — непосредственный родитель) */
+const splitPath = (modulePath: string): { name: string, parent?: string } => {
+  const parts = modulePath.split('.');
+  const name = parts.pop() as string;
+
+  return { name, parent: parts.pop() };
+};
 
 const makeEvent = (
   event: (sv: SV, arg: any) => Promise<void>,
   { skipInit = false } = {},
-) => {
-  return async (arg: any) => {
-    const sv = new SV(process.cwd(), BASE_DIR);
+) => async (arg: any) => {
+  const sv = new SV(process.cwd(), arg.modulesDir);
 
-    try {
-      /* publish умеет работать с ещё не git/npm-инициализированным проектом */
-      if (!skipInit) {
-        await sv.init();
-      }
-
-      await event(sv, arg);
-    } catch (e) {
-      handleErrors(e as Error);
+  try {
+    /* publish умеет работать с ещё не git/npm-инициализированным проектом */
+    if (!skipInit) {
+      await sv.init();
     }
-  };
+
+    await event(sv, arg);
+  } catch (e) {
+    handleErrors(e as Error);
+  }
 };
 
-const install = makeEvent(async (sv, arg) => {
-  const { url: gitUrl, target, version } = arg as {
+const put = makeEvent(async (sv, arg) => {
+  const { url: gitUrl, target, ver } = arg as {
     url: string,
     target?: string,
-    version?: string,
+    ver?: string,
   };
-  await sv.add(gitUrl, target, version);
+
+  await sv.put(gitUrl, ver || target, ver ? target : undefined);
 });
 
-const update = makeEvent(async sv => {
-  const versions = sv.listVersions();
+const update = makeEvent(async (sv, arg) => {
+  const { path: modulePath } = arg as { path?: string };
 
-  await Promise.all(Object.keys(versions).map(name => sv.setVersion(name)));
+  if (!modulePath) {
+    /* init внутри makeEvent уже пересобрал модули на максимально разрешённые */
+    log.message(chalk.green.bold('Modules are up to date!'));
+
+    return;
+  }
+
+  const { name, parent } = splitPath(modulePath);
+  const entry = sv.getResolution()[name];
+
+  if (!entry) throw new SVError('ADDON_NOT_FOUND', { name });
+
+  await sv.put(entry.url, '*', parent);
 });
 
-const setVersion = makeEvent(async (sv, arg) => {
-  const { path, version } = arg as {path: string, version?: string};
-  await sv.setVersion(path, version);
+const del = makeEvent(async (sv, arg) => {
+  const { path: modulePath } = arg as {path: string};
+  const { name, parent } = splitPath(modulePath);
+
+  await sv.delete(name, parent);
 });
 
-const remove = makeEvent(async (sv, arg) => {
-  const { path } = arg as {path: string};
-  await sv.remove(path);
+const listVersions = makeEvent(async (sv, arg) => {
+  const { name, installed } = arg as { name?: string, installed?: boolean };
+
+  if (installed) {
+    const resolution = sv.getResolution();
+
+    if (name && !resolution[name]) {
+      throw new SVError('ADDON_NOT_FOUND', { name });
+    }
+
+    const names = name ? [name] : Object.keys(resolution);
+
+    await Promise.all(names.map(async moduleName => {
+      const version = await sv.currentVersion(moduleName);
+
+      log.message(
+        chalk.bold(moduleName),
+        version || chalk.red('no version tag'),
+      );
+    }));
+
+    return;
+  }
+
+  const versions = sv.listVersions(name);
+
+  if (name) {
+    log.message(chalk.bold(name), (versions as string[]).join(', '));
+
+    return;
+  }
+
+  Object.entries(versions as Record<string, string[]>)
+    .forEach(([moduleName, moduleVersions]) => {
+      log.message(chalk.bold(moduleName), moduleVersions.join(', '));
+    });
 });
 
 const publish = makeEvent(async (sv, arg) => {
@@ -75,65 +127,64 @@ const validate = makeEvent(async sv => {
   log.message(chalk.green.bold('Everything is up to date!🔥'));
 });
 
-/* init внутри makeEvent: загрузит deps и напечатает граф */
-const init = makeEvent(async () => {});
-
-// eslint-disable-next-line @typescript-eslint/no-unused-expressions
 export const s = yargs.scriptName('sv')
-  .usage('$0 <cmd> [args]')
+  .usage('$0 [cmd] [args]')
+  .option('modules-dir', {
+    type: 'string',
+    describe: 'Directory where submodules live'
+      + ' (stored in package.json as sv-dir)',
+  })
   .command(
-    ['validate', '$0', 'v'],
+    ['$0'],
     'Validate and install modules',
     () => {},
     validate,
   )
   .command(
-    ['init'],
-    'Init project, resolve deps and print selected versions',
-    () => {},
-    init,
-  )
-  .command(
-    ['update', 'u'],
-    'Update git modules to actual versions',
-    () => {},
+    ['update [path]', 'u'],
+    'Update modules to the latest allowed versions',
+    y => y.positional('path', {
+      type: 'string',
+      describe: 'Module path (A.B.C), all modules when omitted',
+    }),
     update,
   )
   .command(
-    ['install <url> [target] [version]', 'i'],
-    'Install new submodule',
+    ['put <url> [target]', 'install', 'i'],
+    'Install a submodule or change its version',
     y => y.positional('url', {
       type: 'string',
-      describe: 'Git submodule url',
+      describe: 'Git submodule url or installed module name',
     }).positional('target', {
       type: 'string',
-      describe: 'Target module path (A.B) or version (1.2.0)',
-    }).positional('version', {
+      describe: 'Parent module name',
+    }).option('ver', {
       type: 'string',
+      alias: 'v',
       describe: 'Version to install',
     }),
-    install,
+    put,
   )
   .command(
-    ['set-version <path> [version]', 'sv'],
-    'Set submodule version (latest allowed when omitted)',
-    y => y.positional('path', {
-      type: 'string',
-      describe: 'Submodule path (A.B.C)',
-    }).positional('version', {
-      type: 'string',
-      describe: 'Version to checkout',
-    }),
-    setVersion,
-  )
-  .command(
-    ['remove <path>', 'r'],
-    'Remove submodule by path',
+    ['delete <path>', 'remove', 'r'],
+    'Delete submodule by path',
     y => y.positional('path', {
       type: 'string',
       describe: 'Submodule path (A.B.C)',
     }),
-    remove,
+    del,
+  )
+  .command(
+    ['list-versions [name]', 'ls'],
+    'List available versions of all modules or one',
+    y => y.positional('name', {
+      type: 'string',
+      describe: 'Module name',
+    }).option('installed', {
+      type: 'boolean',
+      describe: 'Show installed versions instead of available',
+    }),
+    listVersions,
   )
   .command(
     ['publish [module]', 'p'],

@@ -1,10 +1,10 @@
-import { versionUtil } from '../versionUtil';
+import { versionUtil } from '../../versionUtil';
 import { GithubError } from './GithubError';
 
 /*
  * GitHub GraphQL API без внешних зависимостей (глобальный fetch, Node 18+).
  * Токен обязателен (GraphQL не работает анонимно): из JS API
- * (github.setToken) или GITHUB_TOKEN из env.
+ * (git.api.setToken) или GITHUB_TOKEN из env.
  */
 const ENDPOINT = 'https://api.github.com/graphql';
 
@@ -155,7 +155,7 @@ export interface IGithubVersion {
   pkg: any | null;
 }
 
-export const github = {
+export const api = {
   /* Токен из JS API; без него (и при undefined) работает env-переменная */
   setToken: (token?: string): void => {
     apiToken = token;

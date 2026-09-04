@@ -2,6 +2,7 @@ export { PubGrub, pubGrub } from './PubGrub';
 export type {
   IEntrySource,
   IIncompatibility,
+  IOverride,
   IPackageEntry,
   IRequirement,
   IResolvedPackage,

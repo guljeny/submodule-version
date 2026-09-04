@@ -1,7 +1,7 @@
 {
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
-  "version": "2.5.0",
+  "version": "3.0.0",
   "repository": "github:guljeny/submodule-version",
   "main": "dist/src/index.js",
   "bin": {
