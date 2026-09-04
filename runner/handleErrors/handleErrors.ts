@@ -1,13 +1,20 @@
-import { handleBuildGraphError } from './handleBuildGraphError';
-import { handleInstallError } from './handleInstallError';
+import { GitError } from '../../src/git';
+import { GithubError, SVError } from '../../src';
+import { handleSVError } from './handleSVError';
 import { handleGitError } from './handleGitError';
+import { handleGithubError } from './handleGithubError';
 import { log } from '../log';
 
-export const handleErrors = async (error: Error, gitUrl: string) => {
-  await Promise.all([
-    handleBuildGraphError(error),
-    handleInstallError(error, gitUrl),
-    handleGitError(error),
-  ]);
-  log.error('unhandled error', error.message);
+export const handleErrors = async (error: Error) => {
+  handleSVError(error);
+  handleGitError(error);
+  handleGithubError(error);
+
+  if (
+    !(error instanceof SVError)
+    && !(error instanceof GitError)
+    && !(error instanceof GithubError)
+  ) {
+    log.error('unhandled error', error.message);
+  }
 };

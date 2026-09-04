@@ -1,7 +1,7 @@
 {
   "name": "submodule-version",
   "description": "Git <S>ubmodule <V>ersioning tool",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "repository": "github:guljeny/submodule-version",
   "main": "dist/src/index.js",
   "bin": {
@@ -11,7 +11,7 @@
   "scripts": {
     "prepare": "npm run build",
     "test": "npx jest",
-    "build": "rm -rf ./dist && npx tsc",
+    "build": "rm -rf ./dist && npx tsc && chmod +x dist/runner/index.js",
     "lint": "npx eslint ./src"
   },
   "author": "Yauheni Hul",

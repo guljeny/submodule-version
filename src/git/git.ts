@@ -385,6 +385,25 @@ export const git = {
     });
   },
 
+  /*
+   * package.json сабмодуля на произвольном рефе (теге), не трогая рабочую
+   * копию. Нет файла или рефа — null (ленивое чтение depsByVersion).
+   */
+  readJSONAtRef: async (name: string, ref: string): Promise<any | null> => {
+    const module = path.join(RunOptions.modulesDir, name);
+
+    try {
+      const res = await execAsync(
+        `git -C ${module} show ${ref}:package.json`,
+        { cwd: RunOptions.cwd },
+      );
+
+      return JSON.parse(res.stdout.toString());
+    } catch {
+      return null;
+    }
+  },
+
   rm: async (submoduleName: string) => {
     const modulePath = path.join(RunOptions.modulesDir, submoduleName);
 

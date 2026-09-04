@@ -68,7 +68,8 @@ describe('Pick', () => {
   it('Caret range includes higher minors', () => {
     const versions = ['0.2.5', '0.2.6', '0.2.8', '0.3.0', '1.0.0'];
 
-    expect(versionUtil.pick(versions, '^0.2.6')).toEqual(['0.2.6', '0.2.8', '0.3.0']);
+    expect(versionUtil.pick(versions, '^0.2.6'))
+      .toEqual(['0.2.6', '0.2.8', '0.3.0']);
   });
 
   it('Tilde range keeps minor pinned', () => {
