@@ -1,6 +1,7 @@
 import { SV } from '../sv';
 import { PubGrub } from '../PubGrub';
 import { git } from '../git';
+import { npm } from '../npm';
 import { pkgJSONManager } from '../pkgJSONManager';
 import { readFile } from 'fs/promises';
 
@@ -40,12 +41,19 @@ jest.mock('../pkgJSONManager', () => ({
   },
 }));
 
+jest.mock('../npm', () => ({
+  npm: {
+    install: jest.fn(async () => undefined),
+  },
+}));
+
 const PubGrubMock = PubGrub as unknown as jest.Mock;
 const resolveMock = jest.fn();
 const readMock = pkgJSONManager.read as jest.Mock;
 const writeMock = pkgJSONManager.write as jest.Mock;
 const readFileMock = readFile as jest.Mock;
 const localMock = git.local as unknown as Record<string, jest.Mock>;
+const npmInstallMock = npm.install as jest.Mock;
 const url = (name: string) => `git@git:repo/${name}.git`;
 
 const entry = (
@@ -202,6 +210,41 @@ describe('SV.init', () => {
       'sv-dir': 'addons',
     });
   });
+
+  it('runs npm install when modules change', async () => {
+    readMock.mockResolvedValue({
+      sv: { [url('A')]: '*' },
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+    localMock.isGitRepo.mockImplementation(
+      async (dir: string) => dir === '/project',
+    );
+    resolveMock.mockResolvedValue({
+      A: entry('A', { '1.0.0': {} }, '1.0.0'),
+    });
+
+    const sv = new SV('/project');
+
+    await sv.init();
+
+    expect(npmInstallMock).toHaveBeenCalled();
+  });
+
+  it('skips npm install when nothing changed', async () => {
+    readMock.mockResolvedValue({
+      sv: {},
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+    resolveMock.mockResolvedValue({});
+
+    const sv = new SV('/project');
+
+    await sv.init();
+
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('SV.put', () => {
@@ -223,6 +266,7 @@ describe('SV.put', () => {
     });
     expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
     expect(localMock.checkout).toHaveBeenCalledWith('B', '1.2.0');
+    expect(npmInstallMock).toHaveBeenCalled();
   });
 
   it('falls back to * when version is omitted', async () => {
@@ -331,6 +375,17 @@ describe('SV.put', () => {
     );
     expect(writeMock).not.toHaveBeenCalled();
     expect(localMock.addSubmodule).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates an npm install failure', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue({});
+    npmInstallMock.mockRejectedValueOnce(new Error('npm failed'));
+
+    const sv = new SV('/project');
+
+    await expect(sv.put(url('B'))).rejects.toThrow('npm failed');
   });
 });
 
@@ -358,6 +413,7 @@ describe('SV.delete', () => {
       'sv-dir': 'modules',
     });
     expect(localMock.rm).toHaveBeenCalledWith('A');
+    expect(npmInstallMock).toHaveBeenCalled();
   });
 
   it('rejects deleting a module missing from rootDeps', async () => {

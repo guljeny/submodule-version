@@ -6,38 +6,37 @@
 
 `Submodule version` is a tool to manage git submodules as versioned packages.
 
-This tool designed to split projects in-to submodules *without npm-packages headache*.
+This tool is designed to split projects into submodules *without npm-packages headache*.
 
-With `submodule version` code can be organized like a *single monorepo*, but each submodule can be *easily reused* in another projects like npm-package.
+With `submodule version` code can be organized like a *single monorepo*, but each submodule can be *easily reused* in other projects like an npm package.
 
 Each module — the project itself and every submodule — declares its dependencies in the `sv` field of its `package.json`, and each release is just a semver git tag. When modules are installed, updated or deleted, `sv` resolves the newest mutually compatible version set across the whole dependency tree with the **PubGrub** algorithm (the one behind Dart's `pub` package manager), reading tags and their `package.json` files straight from the GitHub API without cloning. The resolved set is then applied to the working tree: missing submodules are added, versions are switched to the selected tags and the corresponding `package.json` files are updated — and if no compatible set exists, nothing is touched and a descriptive conflict error is reported.
 
 ## Problem to solve
 
-Take a look on the next situation:
+Take a look at the following situation:
 
 - Project has 2 submodules `ui-button-element` and `render-engine`
-- Package `ui-button-element` dependents on the `render-engine`
-- Third repo `ui-slider-element` dependets on newest version of the `render-engine` and not included in the project
+- Package `ui-button-element` depends on the `render-engine`
+- Third repo `ui-slider-element` depends on the newest version of the `render-engine` and is not included in the project
 
-This cause next problems:
+This causes the following problems:
 
-- Add submodule `ui-slider-element` cause difficulties with handle different `render-engine` versions
-- Manual swithing branches in submodules with big codebase can confuse
-- Updated `ui-button-element` with new version of `render-engine` should be used in another project with the same version
+- Adding the submodule `ui-slider-element` causes difficulties handling different `render-engine` versions
+- Manually switching branches in submodules with a big codebase is confusing
+- An updated `ui-button-element` with a new version of `render-engine` should be used in another project with the same version
 
 Submodule version helps to
 
 - Handle which project should be updated and which version should be installed
-- Help update submodules and theirs dependencies
+- Help update submodules and their dependencies
 - Install new submodules
 
 ## Installation
 
 - Install sv tool `npm i -D submodule-version`
 - Set up a GitHub token (see below) — `sv` reads module versions through the GitHub API
-- Install first submodule `npx sv i <git_repo>` — the `workspaces` section in `package.json` is added automatically on `init`
-- Install npm dependencies `npm i`. Submodule will be linked in node_modules and its dependencies will be installed
+- Install first submodule `npx sv i <git_repo>` — the `workspaces` section in `package.json` is added automatically on `init`, and `npm install` runs automatically, so the submodule is linked in node_modules and its dependencies are installed
 - Use your submodule in code `import submodule from 'submodule-name'` 🔥
 
 ### GitHub token
@@ -57,24 +56,25 @@ By default submodules live in `modules/` — unless existing submodules in `.git
 
 ## How it works
 
-- Each submodule and main project has own `package.json` with `sv` object inside. `sv` object will be generated automatically and will contain every dependency version
+- Each submodule and the main project has its own `package.json` with `sv` object inside. `sv` object will be generated automatically and will contain every dependency version
   ```
   "sv": {
       "git@github.com:guljeny/submodule-version.git": "^1.0.0"
   }
   ```
-- Each submodule has a [version](#versioning) tags, and `sv` use list of this tags to resolve dependencies
+- Each submodule has [version](#versioning) tags, and `sv` uses the list of these tags to resolve dependencies
 - The installed version of a submodule is the version tag git `HEAD` points at
 - `Submodule version` resolves the newest compatible set with PubGrub and loads nested repositories only when a selected version requires them
 - `sv` never switches a submodule version if it has uncommitted changes or unpushed commits — your local work is always kept intact 🧯
+- After modules are installed, switched or removed, `sv` runs `npm install` automatically — no manual `npm i` is needed (on plain `npx sv` it runs only when something actually changed)
 
 ## Versioning
 
-Sumodules without specified version tags will be installed with ref to the latest commit. You should manage them manually.
+Submodules without specified version tags will be installed with a ref to the latest commit. You should manage them manually.
 
-To add new version in submodule:
-- Specify version in `package.json`
-- Add and push git tag with the same version (`git tag 1.0.1`)
+To add a new version to a submodule:
+- Specify the version in `package.json`
+- Add and push a git tag with the same version (`git tag 1.0.1`)
 
 Or use the [`publish`](#programmatic-api) API, which bumps the version, commits, tags and pushes in one call.
 
@@ -109,7 +109,7 @@ The constructor accepts `(projectDir, modulesDir?, { githubToken? })`. The modul
 
 ### Dependency resolution
 
-- `sv.init()` resolves `package.json#sv` with PubGrub and installs/syncs submodules to the resolved versions. It also adds the modules dir to `workspaces` in `package.json` when it is missing.
+- `sv.init()` resolves `package.json#sv` with PubGrub and installs/syncs submodules to the resolved versions. It also adds the modules dir to `workspaces` in `package.json` when it is missing, and runs `npm install` when anything changed. All mutations (`put`, `delete`, updates) run `npm install` automatically after applying.
 - `sv.getResolution()` returns the selected version and selected-version dependencies for every resolved module.
 - `new PubGrub(source).resolve(rootDeps)` runs the resolver with a custom entry source, which is useful for tests and non-GitHub registries.
 
@@ -196,8 +196,8 @@ try {
 }
 ```
 
-## Submodule dependencies 
+## Submodule dependencies
 
-Sumbodules can contains their own dependencies specified in `package.json` as `sv` object.
+Submodules can contain their own dependencies specified in `package.json` as `sv` object.
 
-To install submodule in submodule run `npx sv put <git_url> <target_submodule>`
+To install a submodule into a submodule, run `npx sv put <git_url> <target_submodule>`

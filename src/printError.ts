@@ -121,6 +121,10 @@ const printSVError = (error: SVError): string => {
     case ERR.GIT_DIRTY_SWITCH_CONFLICT:
       return 'Checkout failed: uncommitted changes cannot be carried over'
         + ' - move them manually';
+    case ERR.NPM_INSTALL_FAILED:
+      return `npm install failed${details.reason
+        ? `: ${String(details.reason)}`
+        : ''}`;
     default:
       return code;
   }

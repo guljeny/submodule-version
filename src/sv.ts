@@ -11,6 +11,7 @@ import { EntryStore } from './entryStore';
 import { RunOptions } from './runOptions';
 import { versionUtil } from './versionUtil';
 import { git, GitError } from './git';
+import { npm } from './npm';
 import { SVError } from './errors';
 
 /*
@@ -151,25 +152,35 @@ export class SV {
   /*
    * Синк рабочей копии с резолвом: недостающие сабмодули добавляются,
    * версии переключаются, исчезнувшие из резолва модули удаляются.
+   * Возвращает true, если рабочая копия изменилась.
    */
-  private syncModules = async (resolution: TPubGrubResult): Promise<void> => {
+  private syncModules = async (
+    resolution: TPubGrubResult,
+  ): Promise<boolean> => {
     const previous = this.resolution || {};
+    let changed = false;
 
     await Promise.all(Object.entries(resolution).map(async ([name, entry]) => {
       const dir = path.join(RunOptions.modulesDir, name);
 
       if (!await git.local.isGitRepo(dir)) {
         await git.local.addSubmodule(entry.url);
+        changed = true;
       }
 
       if (await git.local.currentVersion(name) !== entry.version) {
         await git.local.checkout(name, entry.version);
+        changed = true;
       }
     }));
 
     const removed = Object.keys(previous).filter(name => !resolution[name]);
 
+    if (removed.length) changed = true;
+
     await Promise.all(removed.map(name => git.local.rm(name)));
+
+    return changed;
   };
 
   /*
@@ -207,6 +218,12 @@ export class SV {
       await pkgJSONManager.write(baseJson);
     }
 
+    /*
+     * package.json уже записан — npm подтянет workspaces и зависимости
+     * нового набора модулей.
+     */
+    await npm.install();
+
     this.resolution = resolution;
   };
 
@@ -220,15 +237,22 @@ export class SV {
     }
 
     const dirChanged = await this.syncModulesDir(baseJson);
+    const jsonChanged = ensureWorkspaces(baseJson) || dirChanged;
 
-    if (ensureWorkspaces(baseJson) || dirChanged) {
+    if (jsonChanged) {
       await pkgJSONManager.write(baseJson);
     }
 
     const rootDeps = (baseJson.sv || {}) as TDependencies;
     const resolution = await this.resolveDeps(rootDeps);
+    const modulesChanged = await this.syncModules(resolution);
 
-    await this.syncModules(resolution);
+    /*
+     * npm install запускается только когда реально что-то изменилось —
+     * иначе каждый CLI-вызов (init идёт перед любой командой) платил
+     * бы за полный прогон npm.
+     */
+    if (jsonChanged || modulesChanged) await npm.install();
 
     this.resolution = resolution;
   };
