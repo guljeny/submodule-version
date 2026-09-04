@@ -23,6 +23,10 @@ export const handleSVError = (error: Error) => {
     log.error('SV is not initialized - call init() first');
   }
 
+  if (code === ERR.NOT_IMPLEMENTED) {
+    log.error('This command is temporarily unavailable during PubGrub migration');
+  }
+
   if (code === ERR.PATH_NOT_FOUND) {
     log.error('Path', chalk.red.bold(String(details.path)), 'is not found in the graph');
   }

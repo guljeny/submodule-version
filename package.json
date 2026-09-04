@@ -25,6 +25,7 @@
   "license": "ISC",
   "devDependencies": {
     "@types/jest": "^29.5.13",
+    "@types/semver": "^7.5.8",
     "eslint": "9.9.1",
     "eslint-config-soft": "^1.0.5",
     "ts-jest": "^29.2.5",
@@ -33,6 +34,7 @@
   "dependencies": {
     "chalk": "^4.1.2",
     "jest": "^29.7.0",
+    "semver": "^7.6.3",
     "typescript": "^5.6.2",
     "yargs": "^17.7.2"
   }

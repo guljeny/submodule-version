@@ -1,97 +1,103 @@
-enum ComapreMode {
-  major = 0,
-  minor = 1,
-  path = 2,
-}
+import semver from 'semver';
 
-const cleanup = (v: string) => v.replace(/^\^?~?/, '');
+export type TVersionConstraint = string;
 
-const toArray = (v: string): number[] => (
-  cleanup(v).split('.').map(Number)
+const normalizeConstraint = (constraint = '*'): string | null => {
+  const value = constraint.trim();
+
+  if (!value) return null;
+
+  return semver.validRange(value);
+};
+
+const validate = (value: string, range = false): boolean => {
+  const input = value.trim();
+
+  if (!input) return false;
+
+  if (range) return normalizeConstraint(input) !== null;
+
+  return semver.valid(input) === input;
+};
+
+const compare = (a: string, b: string): number => semver.compare(a, b);
+
+const satisfies = (version: string, constraint = '*'): boolean => {
+  const range = normalizeConstraint(constraint);
+
+  return range !== null && semver.satisfies(version, range);
+};
+
+const sort = (versions: string[]): string[] => (
+  [...versions].filter(v => validate(v)).sort(semver.rcompare)
 );
 
-const mode = (v: string) => {
-  // Minor and path can be vary. Only major should be same
-  if (v.startsWith('^')) return ComapreMode.major;
-  // Path can be vary. Major and minor should be same
-  if (v.startsWith('~')) return ComapreMode.minor;
+const select = (
+  versions: string[],
+  constraints: string[] = ['*'],
+): string[] => sort(versions).filter(version => (
+  constraints.every(constraint => satisfies(version, constraint))
+));
 
-  // Everything should be same
-  return ComapreMode.path;
+const latest = (
+  versions: string[],
+  constraints: string[] = ['*'],
+): string => select(versions, constraints)[0] || '';
+
+const intersection = (...sets: string[][]): string[] => {
+  if (!sets.length) return [];
+
+  return sort(sets[0].filter(version => (
+    sets.slice(1).every(set => set.includes(version))
+  )));
 };
 
-const compare = (
-  baseVer: number[],
-  actualVer: number[],
-  compareMode: ComapreMode,
-) => {
-  // Components pinned by the mode must match exactly
-  for (let i = 0; i <= compareMode; i++) {
-    if (baseVer[i] !== actualVer[i]) return false;
-  }
-
-  // The rest must be same or higher, compared from most significant:
-  // a higher minor allows any patch (0.3.0 fits ^0.2.6)
-  for (let i = compareMode + 1; i < 3; i++) {
-    if (actualVer[i] !== baseVer[i]) return actualVer[i] > baseVer[i];
-  }
-
-  return true;
-};
-
-const pick = (allVersions: string[], v: string) => {
-  if (v === '*') return allVersions;
-
-  const vMode = mode(v);
-  const vArr = toArray(v);
-
-  return allVersions.filter(av => {
-    const avArr = toArray(av);
-
-    return compare(vArr, avArr, vMode);
-  });
-};
-
-const validate = (v: string, relative?: boolean) => {
-  if (relative) {
-    if (v === '*') return true;
-
-    return /^[\^$]?\d+\.\d+\.\d+$/.test(v);
-  }
-
-  return /^\d+\.\d+\.\d+$/.test(v);
-};
-
-const latest = (versions: string[]) => (
-  cleanup([...versions].sort((v1, v2) => {
-    const v1Arr = toArray(v1);
-    const v2Arr = toArray(v2);
-
-    return v1Arr.reduce((acc, v1Val, i) => {
-      if (acc !== 0) return acc;
-      const v2Val = v2Arr[i];
-
-      return v2Val - v1Val;
-    }, 0);
-  })[0] || '')
+const union = (...sets: string[][]): string[] => (
+  sort([...new Set(sets.flat())])
 );
+
+const difference = (left: string[], right: string[]): string[] => {
+  const excluded = new Set(right);
+
+  return sort(left.filter(version => !excluded.has(version)));
+};
+
+const intersects = (left: string[], right: string[]): boolean => {
+  const rightSet = new Set(right);
+
+  return left.some(version => rightSet.has(version));
+};
+
+const isSubset = (subset: string[], superset: string[]): boolean => {
+  const allowed = new Set(superset);
+
+  return subset.every(version => allowed.has(version));
+};
 
 const bump = (
   version: string,
   kind: 'release' | 'minor' | 'major',
 ): string => {
-  const [major, minor, patch] = toArray(version);
+  const release = kind === 'release' ? 'patch' : kind;
+  const next = semver.inc(version, release);
 
-  if (kind === 'major') return `${major + 1}.0.0`;
-  if (kind === 'minor') return `${major}.${minor + 1}.0`;
+  if (!next) throw new Error(`Invalid semantic version: ${version}`);
 
-  return `${major}.${minor}.${patch + 1}`;
+  return next;
 };
 
 export const versionUtil = {
-  compare,
-  pick,
+  normalizeConstraint,
   validate,
+  compare,
+  satisfies,
+  sort,
+  select,
   latest,
+  intersection,
+  union,
+  difference,
+  intersects,
+  isSubset,
   bump,
 };

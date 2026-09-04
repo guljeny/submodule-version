@@ -53,7 +53,7 @@ Submodule version helps to
   ```
 - Each submodule has a [version](#versioning) tags, and `sv` use list of this tags to resolve dependencies
 - The installed version of a submodule is the version tag git `HEAD` points at
-- `Submodule version` creates a graph of whole project and install only possible and actual versions
+- `Submodule version` resolves the newest compatible set with PubGrub and loads nested repositories only when a selected version requires them
 - `sv` never switches a submodule version if it has uncommitted changes or unpushed commits — your local work is always kept intact 🧯
 
 ## Versioning
@@ -69,27 +69,31 @@ Or use the [`publish`](#programmatic-api) API, which bumps the version, commits,
 
 ## Commands
 
-- `npx sv validate` - Validate all dependencis and install missing modules
-- `npx sv install <git_url> [target_submodule]` - Install new dependency
-- `npx sv update` - Update all dependencies to the latest possible versions
+- `npx sv validate` - Validate that all dependencies can be resolved
+- `npx sv init` - Resolve and print the newest compatible dependency set
 - `npx sv publish [module] [--bump release|minor|major] [-m message] [--repo-url git_url]` - Commit, tag and push a new version of a module (or the project itself when `module` is omitted). `--repo-url` is required for the first publish of a module without a git remote
 - `npx sv help` - Description of all commands
+
+`install`, `update`, `set-version` and `remove` are temporarily unavailable while their mutation flow is migrated from `Graph` to PubGrub.
 
 ## Programmatic API
 
 The `SV` class can be used directly from code:
 
 ```ts
-import { SV, versionUtil } from 'submodule-version';
+import { PubGrub, SV, versionUtil } from 'submodule-version';
 
 const sv = new SV(process.cwd(), 'modules');
+await sv.init();
+
+const resolution = sv.getResolution();
 ```
 
-### Switching versions
+### Dependency resolution
 
-- `sv.setVersion(name, version, constraint?)` - Checkout the submodule to a specific version tag and pin the version constraint in the project `package.json`. By default the constraint is an exact pin of the selected version; pass `^<version>` as `constraint` to keep receiving newer versions on update. If the submodule has local changes that cannot be carried over, the switch is aborted without touching the working tree (`GIT_DIRTY_SWITCH_CONFLICT` error)
-- `sv.getConstraint(name)` - Read the current version constraint of a submodule from the project `package.json`
-- `sv.setConstraint(name, constraint)` - Change the version constraint of a submodule without switching the checked-out version
+- `sv.init()` resolves `package.json#sv` with PubGrub.
+- `sv.getResolution()` returns the selected version and selected-version dependencies for every resolved module.
+- `new PubGrub(source).resolve(rootDeps)` runs the resolver with a custom entry source, which is useful for tests and non-GitHub registries.
 
 ### Inspecting changes and versions
 
@@ -116,7 +120,7 @@ const sv = new SV(process.cwd(), 'modules');
 
 ### Version utilities
 
-`versionUtil` is also exported and now includes `versionUtil.bump(version, 'release' | 'minor' | 'major')` alongside `compare`, `pick`, `validate` and `latest`.
+`versionUtil` exposes standard SemVer validation, comparison, filtering and finite-set operations used by PubGrub: `validate`, `satisfies`, `compare`, `sort`, `select`, `latest`, `intersection`, `union`, `difference`, `intersects`, `isSubset` and `bump`.
 
 ## Submodule dependencies 
 

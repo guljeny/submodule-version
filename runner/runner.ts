@@ -70,20 +70,7 @@ const publish = makeEvent(async (sv, arg) => {
 }, { skipInit: true });
 
 const validate = makeEvent(async sv => {
-  const graph = sv.getGraph();
-
-  Object.entries(graph.entries).forEach(([name, entry]) => {
-    const noUsedVersion = !entry.version
-      || !graph.used(name).includes(entry.version);
-
-    if (noUsedVersion && Object.keys(entry.versions).length === 0) {
-      log.message(
-        chalk.yellow('⚠️  WARN: Module'),
-        chalk.bgYellow.black(` ${name} `),
-        chalk.yellow('does not contain any version tag!'),
-      );
-    }
-  });
+  sv.getResolution();
 
   log.message(chalk.green.bold('Everything is up to date!🔥'));
 });
@@ -102,7 +89,7 @@ export const s = yargs.scriptName('sv')
   )
   .command(
     ['init'],
-    'Init project, load deps and print the graph',
+    'Init project, resolve deps and print selected versions',
     () => {},
     init,
   )
