@@ -111,6 +111,7 @@ The constructor accepts `(projectDir, modulesDir?, { githubToken? })`. The modul
 
 - `sv.init()` resolves `package.json#sv` with PubGrub and installs/syncs submodules to the resolved versions. It also adds the modules dir to `workspaces` in `package.json` when it is missing, and runs `npm install` when anything changed. All mutations (`put`, `delete`, updates) run `npm install` automatically after applying.
 - `sv.getResolution()` returns the selected version and selected-version dependencies for every resolved module.
+- The working copy of an installed submodule is the source of truth for its checked-out version: dependencies edited locally but not yet published as a tag take part in the resolution immediately. The overlay applies only to the version tag `HEAD` points at, and only when that version exists on the remote — a `HEAD` without a version tag (mid-publish) or a local-only tag falls back to the remote manifest.
 - `new PubGrub(source).resolve(rootDeps)` runs the resolver with a custom entry source, which is useful for tests and non-GitHub registries.
 
 ### Installing, updating and deleting modules

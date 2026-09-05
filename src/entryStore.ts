@@ -1,5 +1,9 @@
+import path from 'path';
 import { SVError } from './errors';
 import { git } from './git';
+import { pkgJSONManager } from './pkgJSONManager';
+import { RunOptions } from './runOptions';
+import { versionUtil } from './versionUtil';
 import type {
   IEntrySource,
   IOverride,
@@ -80,6 +84,34 @@ export class EntryStore implements IEntrySource {
     }),
   );
 
+  /*
+   * Рабочая копия сабмодуля — источник правды для checkout'нутой версии:
+   * зависимости, изменённые локально и ещё не опубликованные тегом,
+   * видны резолверу сразу. Применяется только к версии на HEAD (по тегам)
+   * и только если такая версия есть в remote-наборе: HEAD без тега
+   * (середина publish) или локальный тег вне remote — оверлей пропускается.
+   */
+  private localOverlay = async (
+    name: string,
+    versions: Record<string, TDependencies>,
+  ): Promise<void> => {
+    if (!RunOptions.cwd || !RunOptions.modulesDir) return;
+
+    const dir = path.join(RunOptions.cwd, RunOptions.modulesDir, name);
+
+    if (!await git.local.isGitRepo(dir)) return;
+
+    const version = versionUtil.latest(await git.local.tagsAtHead(dir));
+
+    if (!version || !versions[version]) return;
+
+    const pkg = await pkgJSONManager.read(name);
+
+    if (!pkg) return;
+
+    versions[version] = this.normalizeDependencies(pkg.sv || {});
+  };
+
   private load = async (url: string, name: string): Promise<IPackageEntry> => {
     const fetched = await git.api.fetchVersions(url);
     const versions: Record<string, TDependencies> = {};
@@ -87,6 +119,8 @@ export class EntryStore implements IEntrySource {
     fetched.forEach(({ version, pkg }) => {
       versions[version] = this.normalizeDependencies(pkg?.sv || {});
     });
+
+    await this.localOverlay(name, versions);
 
     return { name, url, versions };
   };

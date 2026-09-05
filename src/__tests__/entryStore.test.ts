@@ -1,5 +1,7 @@
 import { entryStore } from '../entryStore';
 import { git } from '../git';
+import { pkgJSONManager } from '../pkgJSONManager';
+import { RunOptions } from '../runOptions';
 
 jest.mock('../git', () => {
   const actual = jest.requireActual('../git');
@@ -9,11 +11,21 @@ jest.mock('../git', () => {
     git: {
       ...actual.git,
       api: { fetchVersions: jest.fn() },
+      local: {
+        ...actual.git.local,
+        isGitRepo: jest.fn(),
+        tagsAtHead: jest.fn(),
+      },
     },
   };
 });
 
+jest.mock('../pkgJSONManager');
+
 const fetchVersionsMock = git.api.fetchVersions as jest.Mock;
+const isGitRepoMock = git.local.isGitRepo as jest.Mock;
+const tagsAtHeadMock = git.local.tagsAtHead as jest.Mock;
+const readPkgMock = pkgJSONManager.read as jest.Mock;
 const url = (name: string) => `git@git:repo/${name}.git`;
 
 beforeEach(() => {
@@ -244,5 +256,85 @@ describe('entryStore.simulate', () => {
       details: { name: 'Ghost' },
     });
     expect(cb).not.toHaveBeenCalled();
+  });
+});
+
+describe('entryStore local overlay', () => {
+  beforeEach(() => {
+    RunOptions.cwd = '/project';
+    RunOptions.modulesDir = 'addons';
+  });
+
+  afterEach(() => {
+    RunOptions.cwd = '';
+    RunOptions.modulesDir = '';
+  });
+
+  it('overlays the local manifest on the checked-out version', async () => {
+    fetchVersionsMock.mockResolvedValueOnce([
+      { version: '1.0.0', pkg: { sv: { [url('C')]: '^1.0.0' } } },
+      { version: '2.0.0', pkg: { sv: { [url('C')]: '^2.0.0' } } },
+    ]);
+    isGitRepoMock.mockResolvedValueOnce(true);
+    tagsAtHeadMock.mockResolvedValueOnce(['1.0.0']);
+    readPkgMock.mockResolvedValueOnce({ sv: { [url('B')]: '^0.2.0' } });
+
+    const entry = await entryStore.fetch(url('A'));
+
+    expect(entry.versions['1.0.0']).toEqual({ B: '^0.2.0' });
+    expect(entry.versions['2.0.0']).toEqual({ C: '^2.0.0' });
+    expect(entryStore.urlOf('B')).toBe(url('B'));
+  });
+
+  it('keeps the remote manifest when HEAD has no version tag', async () => {
+    fetchVersionsMock.mockResolvedValueOnce([
+      { version: '1.0.0', pkg: { sv: { [url('C')]: '^1.0.0' } } },
+    ]);
+    isGitRepoMock.mockResolvedValueOnce(true);
+    tagsAtHeadMock.mockResolvedValueOnce([]);
+
+    const entry = await entryStore.fetch(url('A'));
+
+    expect(entry.versions['1.0.0']).toEqual({ C: '^1.0.0' });
+    expect(readPkgMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the remote manifest when the module is not installed', async () => {
+    fetchVersionsMock.mockResolvedValueOnce([
+      { version: '1.0.0', pkg: { sv: { [url('C')]: '^1.0.0' } } },
+    ]);
+    isGitRepoMock.mockResolvedValueOnce(false);
+
+    const entry = await entryStore.fetch(url('A'));
+
+    expect(entry.versions['1.0.0']).toEqual({ C: '^1.0.0' });
+    expect(tagsAtHeadMock).not.toHaveBeenCalled();
+  });
+
+  it('skips the overlay when the local tag is not on remote', async () => {
+    fetchVersionsMock.mockResolvedValueOnce([
+      { version: '1.0.0', pkg: { sv: { [url('C')]: '^1.0.0' } } },
+    ]);
+    isGitRepoMock.mockResolvedValueOnce(true);
+    tagsAtHeadMock.mockResolvedValueOnce(['9.9.9']);
+
+    const entry = await entryStore.fetch(url('A'));
+
+    expect(entry.versions['1.0.0']).toEqual({ C: '^1.0.0' });
+    expect(entry.versions['9.9.9']).toBeUndefined();
+    expect(readPkgMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the remote manifest without a local package.json', async () => {
+    fetchVersionsMock.mockResolvedValueOnce([
+      { version: '1.0.0', pkg: { sv: { [url('C')]: '^1.0.0' } } },
+    ]);
+    isGitRepoMock.mockResolvedValueOnce(true);
+    tagsAtHeadMock.mockResolvedValueOnce(['1.0.0']);
+    readPkgMock.mockResolvedValueOnce(null);
+
+    const entry = await entryStore.fetch(url('A'));
+
+    expect(entry.versions['1.0.0']).toEqual({ C: '^1.0.0' });
   });
 });
