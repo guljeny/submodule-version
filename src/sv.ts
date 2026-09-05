@@ -5,6 +5,7 @@ import {
   PubGrub,
   IOverride,
   TDependencies,
+  TIsCandidateCompatible,
   TPubGrubResult,
 } from './PubGrub';
 import { EntryStore } from './entryStore';
@@ -126,14 +127,20 @@ export class SV {
 
   private explicitModulesDir?: string;
 
+  private isCandidateCompatible?: TIsCandidateCompatible;
+
   constructor (
     projectDir: string,
     modulesDir?: string,
-    options: { githubToken?: string } = {},
+    options: {
+      githubToken?: string,
+      isCandidateCompatible?: TIsCandidateCompatible,
+    } = {},
   ) {
     RunOptions.cwd = projectDir;
     RunOptions.modulesDir = modulesDir || DEFAULT_MODULES_DIR;
     this.explicitModulesDir = modulesDir;
+    this.isCandidateCompatible = options.isCandidateCompatible;
     git.api.setToken(options.githubToken);
   }
 
@@ -167,7 +174,7 @@ export class SV {
   private resolveDeps = async (
     rootDeps: TDependencies,
   ): Promise<TPubGrubResult> => {
-    const resolver = new PubGrub(this.store);
+    const resolver = new PubGrub(this.store, this.isCandidateCompatible);
 
     try {
       return await resolver.resolve(rootDeps);

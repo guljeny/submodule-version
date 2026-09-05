@@ -1,5 +1,6 @@
 export { PubGrub, pubGrub } from './PubGrub';
 export type {
+  ICandidate,
   IEntrySource,
   IIncompatibility,
   IOverride,
@@ -8,5 +9,6 @@ export type {
   IResolvedPackage,
   ITerm,
   TDependencies,
+  TIsCandidateCompatible,
   TPubGrubResult,
 } from './types';

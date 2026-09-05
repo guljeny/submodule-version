@@ -123,6 +123,17 @@ const SelfCycle = defineModule('SelfCycle', {
   '1.0.0': { SelfCycle: '*' },
 });
 
+const CandidateA = {
+  ...defineModule('CandidateA', {
+    '1.0.0': {},
+    '2.0.0': {},
+  }),
+  manifests: {
+    '1.0.0': { compatible: true },
+    '2.0.0': { compatible: false },
+  },
+};
+
 const ALL_MODULES = [
   A,
   B,
@@ -152,6 +163,7 @@ const ALL_MODULES = [
   CycleB,
   CycleC,
   SelfCycle,
+  CandidateA,
 ];
 
 const source = (modules: IPackageEntry[]) => {
@@ -276,6 +288,36 @@ describe('PubGrub resolution', () => {
     const result = await currentRoot.resolve();
 
     expect(selected(result)).toEqual({ FallbackA: '1.0.0' });
+  });
+
+  it('selects the highest candidate accepted by the host', async () => {
+    const fixture = source(ALL_MODULES);
+
+    const resolver = new PubGrub(
+      fixture.store,
+      candidate => (candidate.packageJson as any)?.compatible !== false,
+    );
+
+    const result = await resolver.resolve({ [CandidateA.url]: '*' });
+
+    expect(selected(result)).toEqual({ CandidateA: '1.0.0' });
+    expect(result.CandidateA.versions).toEqual({
+      '1.0.0': {},
+      '2.0.0': {},
+    });
+  });
+
+  it('reports a conflict when the host rejects every candidate', async () => {
+    const fixture = source(ALL_MODULES);
+    const resolver = new PubGrub(fixture.store, () => false);
+
+    await expect(resolver.resolve({ [CandidateA.url]: '*' }))
+      .rejects.toMatchObject({
+        error: 'VERSION_CONFLICT',
+        details: { name: 'CandidateA', versions: [] },
+      });
+
+    expect(resolver.getResolution()).toEqual({});
   });
 });
 

@@ -59,6 +59,10 @@ describe('entryStore.fetch', () => {
         '1.0.0': { B: '^1.0.0' },
         '2.0.0': { C: '^2.0.0' },
       },
+      manifests: {
+        '1.0.0': { sv: { [url('B')]: '^1.0.0' } },
+        '2.0.0': { sv: { [url('C')]: '^2.0.0' } },
+      },
     });
 
     expect(fetchVersionsMock).toHaveBeenCalledTimes(1);
@@ -163,6 +167,7 @@ describe('entryStore.simulate', () => {
       name: 'B',
       url: url('B'),
       versions: { '2.0.0': {} },
+      manifests: { '2.0.0': {} },
     });
   });
 
@@ -277,12 +282,22 @@ describe('entryStore local overlay', () => {
     ]);
     isGitRepoMock.mockResolvedValueOnce(true);
     tagsAtHeadMock.mockResolvedValueOnce(['1.0.0']);
-    readPkgMock.mockResolvedValueOnce({ sv: { [url('B')]: '^0.2.0' } });
+    readPkgMock.mockResolvedValueOnce({
+      ewaApi: '2-*',
+      sv: { [url('B')]: '^0.2.0' },
+    });
 
     const entry = await entryStore.fetch(url('A'));
 
     expect(entry.versions['1.0.0']).toEqual({ B: '^0.2.0' });
     expect(entry.versions['2.0.0']).toEqual({ C: '^2.0.0' });
+    expect(entry.manifests?.['1.0.0']).toEqual({
+      ewaApi: '2-*',
+      sv: { [url('B')]: '^0.2.0' },
+    });
+    expect(entry.manifests?.['2.0.0']).toEqual({
+      sv: { [url('C')]: '^2.0.0' },
+    });
     expect(entryStore.urlOf('B')).toBe(url('B'));
   });
 

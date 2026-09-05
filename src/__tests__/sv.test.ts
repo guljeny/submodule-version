@@ -159,6 +159,21 @@ describe('SV.init', () => {
     expect(sv.listVersions()).toEqual({ A: ['1.2.0'] });
   });
 
+  it('passes the candidate compatibility callback to PubGrub', async () => {
+    const isCandidateCompatible = jest.fn(() => true);
+
+    readMock.mockResolvedValue({ sv: {} });
+
+    const sv = new SV('/project', undefined, { isCandidateCompatible });
+
+    await sv.init();
+
+    expect(PubGrubMock).toHaveBeenCalledWith(
+      expect.anything(),
+      isCandidateCompatible,
+    );
+  });
+
   it('guards result before init', () => {
     expect(() => new SV('/project').getResolution()).toThrow(
       expect.objectContaining({ error: 'NOT_INITIALIZED' }),

@@ -7,6 +7,7 @@ import {
   IIncompatibility,
   IPackageEntry,
   IRequirement,
+  TIsCandidateCompatible,
   ITerm,
   IVersionConflict,
   TConflict,
@@ -83,7 +84,12 @@ export class PubGrub {
 
   private incompatibilityKeys = new Set<string>();
 
-  constructor (private source: IEntrySource = entryStore) {}
+  private compatibleVersions = new Map<string, string[]>();
+
+  constructor (
+    private source: IEntrySource = entryStore,
+    private isCandidateCompatible?: TIsCandidateCompatible,
+  ) {}
 
   public resolve = async (
     rootDependencies: TDependencies,
@@ -93,6 +99,7 @@ export class PubGrub {
     this.partialState = null;
     this.incompatibilities = [];
     this.incompatibilityKeys = new Set();
+    this.compatibleVersions = new Map();
 
     const state: ISolverState = {
       selected: new Map([[ROOT, ROOT_VERSION]]),
@@ -170,8 +177,10 @@ export class PubGrub {
           .filter(requirement => requirement.positive)
           .map(requirement => requirement.range);
 
-        version = versionUtil.latest(Object.keys(entry.versions), ranges)
-          || versionUtil.latest(Object.keys(entry.versions));
+        const versions = this.versionsOf(entry);
+
+        version = versionUtil.latest(versions, ranges)
+          || versionUtil.latest(versions);
       }
 
       if (!version) return [];
@@ -225,7 +234,7 @@ export class PubGrub {
       const conflict = this.versionConflict(
         choice.name,
         choice.requirements,
-        Object.keys(choice.entry.versions),
+        this.versionsOf(choice.entry),
       );
 
       this.learn(state, conflict);
@@ -267,7 +276,7 @@ export class PubGrub {
       conflict: lastConflict || this.versionConflict(
         choice.name,
         choice.requirements,
-        Object.keys(choice.entry.versions),
+        this.versionsOf(choice.entry),
       ),
     };
   };
@@ -355,7 +364,8 @@ export class PubGrub {
   };
 
   private candidates = (name: string, state: ISolverState): string[] => {
-    const versions = Object.keys(this.entries.get(name)?.versions || {});
+    const entry = this.entries.get(name);
+    const versions = entry ? this.versionsOf(entry) : [];
     const requirements = state.requirements.get(name) || [];
 
     return versionUtil.sort(versions).filter(version => (
@@ -365,6 +375,25 @@ export class PubGrub {
         return requirement.positive ? matches : !matches;
       })
     ));
+  };
+
+  private versionsOf = (entry: IPackageEntry): string[] => {
+    const cached = this.compatibleVersions.get(entry.name);
+
+    if (cached) return cached;
+
+    const versions = Object.keys(entry.versions).filter(version => (
+      !this.isCandidateCompatible || this.isCandidateCompatible({
+        name: entry.name,
+        url: entry.url,
+        version,
+        packageJson: entry.manifests?.[version] ?? null,
+      })
+    ));
+
+    this.compatibleVersions.set(entry.name, versions);
+
+    return versions;
   };
 
   private addDependencies = async (
@@ -479,7 +508,7 @@ export class PubGrub {
     return this.versionConflict(
       name,
       state.requirements.get(name) || [],
-      Object.keys(this.entries.get(name)?.versions || {}),
+      this.entries.has(name) ? this.versionsOf(this.entries.get(name)!) : [],
     );
   };
 
@@ -556,7 +585,7 @@ export class PubGrub {
       return this.versionConflict(
         name,
         requirements,
-        Object.keys(this.entries.get(name)?.versions || {}),
+        this.entries.has(name) ? this.versionsOf(this.entries.get(name)!) : [],
       );
     }
 

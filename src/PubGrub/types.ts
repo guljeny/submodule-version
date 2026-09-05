@@ -1,9 +1,19 @@
 export type TDependencies = Record<string, string>;
 
+export interface ICandidate {
+  name: string;
+  url: string;
+  version: string;
+  packageJson: unknown | null;
+}
+
+export type TIsCandidateCompatible = (candidate: ICandidate) => boolean;
+
 export interface IPackageEntry {
   name: string;
   url: string;
   versions: Record<string, TDependencies>;
+  manifests?: Record<string, unknown | null>;
 }
 
 export interface IResolvedPackage extends IPackageEntry {

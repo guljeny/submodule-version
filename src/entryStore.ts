@@ -94,6 +94,7 @@ export class EntryStore implements IEntrySource {
   private localOverlay = async (
     name: string,
     versions: Record<string, TDependencies>,
+    manifests: Record<string, unknown | null>,
   ): Promise<void> => {
     if (!RunOptions.cwd || !RunOptions.modulesDir) return;
 
@@ -110,19 +111,22 @@ export class EntryStore implements IEntrySource {
     if (!pkg) return;
 
     versions[version] = this.normalizeDependencies(pkg.sv || {});
+    manifests[version] = pkg;
   };
 
   private load = async (url: string, name: string): Promise<IPackageEntry> => {
     const fetched = await git.api.fetchVersions(url);
     const versions: Record<string, TDependencies> = {};
+    const manifests: Record<string, unknown | null> = {};
 
     fetched.forEach(({ version, pkg }) => {
       versions[version] = this.normalizeDependencies(pkg?.sv || {});
+      manifests[version] = pkg;
     });
 
-    await this.localOverlay(name, versions);
+    await this.localOverlay(name, versions, manifests);
 
-    return { name, url, versions };
+    return { name, url, versions, manifests };
   };
 
   private resolveIdentity = (
