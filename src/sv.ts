@@ -247,6 +247,30 @@ export class SV {
     return dirChanged || workspaceChanged;
   };
 
+  /*
+   * Dangerous-мутация не валидирует дерево, но после записи manifest'а
+   * сохраняет обычный либо частичный результат для внешних менеджеров.
+   */
+  private refreshBestEffortResolution = async (
+    baseJson: any,
+  ): Promise<void> => {
+    if (this.verifiedResolution) {
+      this.resolution = this.verifiedResolution;
+
+      return;
+    }
+
+    this.store.clear();
+
+    try {
+      this.resolution = await this.resolveDeps(
+        (baseJson.sv || {}) as TDependencies,
+      );
+    } catch {
+      /* resolveDeps уже сохранил partial resolution. */
+    }
+  };
+
   public init = async (): Promise<void> => {
     const previousResolution = this.resolution || {};
 
@@ -402,7 +426,9 @@ export class SV {
 
     if (parent && baseChanged) await pkgJSONManager.write(baseJson);
 
-    this.resolution = null;
+    await this.refreshBestEffortResolution(
+      parent ? baseJson : nextTargetJson,
+    );
     await npm.install();
   };
 
@@ -431,11 +457,13 @@ export class SV {
     const previousResolution = this.resolution || {};
 
     this.resolution = resolution;
+    this.verifiedResolution = resolution;
 
     try {
       await this.syncModules(resolution, previousResolution);
       await this.dangerousDelete(name, parentName);
     } finally {
+      this.verifiedResolution = null;
       this.resolution = resolution;
     }
   };
@@ -479,7 +507,10 @@ export class SV {
     }
 
     if (parentName && baseChanged) await pkgJSONManager.write(baseJson);
-    this.resolution = null;
+
+    await this.refreshBestEffortResolution(
+      parentName ? baseJson : nextTargetJson,
+    );
     await npm.install();
   };
 

@@ -486,16 +486,22 @@ describe('SV.put', () => {
 });
 
 describe('SV.dangerousPut', () => {
-  it('adds and records a module without calling PubGrub', async () => {
+  it('adds a module and keeps partial resolution on a conflict', async () => {
+    const partial = {
+      B: entry('B', { '2.1.0': {} }, '2.1.0'),
+    };
+
     readMock.mockResolvedValue({ sv: {} });
     localMock.isGitRepo.mockResolvedValue(false);
     localMock.listVersions.mockResolvedValue(['1.9.0', '2.0.0', '2.1.0']);
-    resolveMock.mockRejectedValue(new Error('version conflict'));
+    resolveMock.mockRejectedValueOnce(new Error('version conflict'));
+    getResolutionMock.mockReturnValue(partial);
     const sv = new SV('/project');
 
     await sv.dangerousPut(url('B'), '^2.0.0');
 
-    expect(resolveMock).not.toHaveBeenCalled();
+    expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^2.0.0' });
+    expect(sv.getResolution()).toBe(partial);
     expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
     expect(localMock.checkout).toHaveBeenCalledWith('B', '2.1.0');
     expect(writeMock).toHaveBeenCalledWith({
@@ -533,8 +539,24 @@ describe('SV.dangerousPut', () => {
         workspaces: ['modules/*'],
         'sv-dir': 'modules',
       });
-      expect(resolveMock).not.toHaveBeenCalled();
+      expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^2.0.0' });
     });
+
+  it('keeps refreshed resolution when npm install fails', async () => {
+    const result = {
+      B: entry('B', { '2.0.0': {} }, '2.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue(result);
+    npmInstallMock.mockRejectedValueOnce(new Error('npm failed'));
+    const sv = new SV('/project');
+
+    await expect(sv.dangerousPut(url('B'), '^2.0.0'))
+      .rejects.toThrow('npm failed');
+
+    expect(sv.getResolution()).toBe(result);
+  });
 
   it('uses the recorded modules dir before touching git', async () => {
     readMock.mockResolvedValue({
@@ -640,22 +662,31 @@ describe('SV.delete', () => {
 });
 
 describe('SV.dangerousDelete', () => {
-  it('removes and records a module without calling PubGrub', async () => {
-    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-    resolveMock.mockRejectedValue(new Error('version conflict'));
-    const sv = new SV('/project');
+  it(
+    'removes a module and keeps partial resolution on a conflict',
+    async () => {
+      const partial = {
+        B: entry('B', { '1.0.0': {} }, '1.0.0'),
+      };
 
-    await sv.dangerousDelete('A');
+      readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+      resolveMock.mockRejectedValueOnce(new Error('version conflict'));
+      getResolutionMock.mockReturnValue(partial);
+      const sv = new SV('/project');
 
-    expect(resolveMock).not.toHaveBeenCalled();
-    expect(localMock.rm).toHaveBeenCalledWith('A');
-    expect(writeMock).toHaveBeenCalledWith({
-      sv: {},
-      workspaces: ['modules/*'],
-      'sv-dir': 'modules',
-    });
-    expect(npmInstallMock).toHaveBeenCalledTimes(1);
-  });
+      await sv.dangerousDelete('A');
+
+      expect(resolveMock).toHaveBeenCalledWith({});
+      expect(sv.getResolution()).toBe(partial);
+      expect(localMock.rm).toHaveBeenCalledWith('A');
+      expect(writeMock).toHaveBeenCalledWith({
+        sv: {},
+        workspaces: ['modules/*'],
+        'sv-dir': 'modules',
+      });
+      expect(npmInstallMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it(
     'removes only the parent dependency and keeps the shared module',
