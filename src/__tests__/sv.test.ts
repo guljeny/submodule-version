@@ -4,6 +4,7 @@ import { git } from '../git';
 import { npm } from '../npm';
 import { pkgJSONManager } from '../pkgJSONManager';
 import { readFile } from 'fs/promises';
+import { SVError } from '../errors';
 
 jest.mock('../PubGrub', () => ({
   PubGrub: jest.fn(),
@@ -486,6 +487,31 @@ describe('SV.put', () => {
 });
 
 describe('SV.dangerousPut', () => {
+  it('reuses the failed put partial resolution without resolving again',
+    async () => {
+      const partial = {
+        B: entry('B', { '2.1.0': {} }, '2.1.0'),
+      };
+
+      readMock.mockResolvedValue({ sv: { [url('B')]: '^1.0.0' } });
+      resolveMock.mockRejectedValueOnce(new SVError('VERSION_CONFLICT'));
+      getResolutionMock.mockReturnValue(partial);
+      const sv = new SV('/project');
+
+      await expect(sv.put('B', '^2.0.0'))
+        .rejects.toMatchObject({ error: 'VERSION_CONFLICT' });
+      await sv.dangerousPut('B', '^2.0.0');
+
+      expect(resolveMock).toHaveBeenCalledTimes(1);
+      expect(sv.getResolution()).toBe(partial);
+      expect(writeMock).toHaveBeenCalledWith({
+        sv: { [url('B')]: '^2.0.0' },
+        workspaces: ['modules/*'],
+        'sv-dir': 'modules',
+      });
+      expect(npmInstallMock).toHaveBeenCalledTimes(1);
+    });
+
   it('adds a module and keeps partial resolution on a conflict', async () => {
     const partial = {
       B: entry('B', { '2.1.0': {} }, '2.1.0'),

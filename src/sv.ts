@@ -111,6 +111,17 @@ export class SV {
   /* Safe put передаёт сюда уже выбранную PubGrub версию на время мутации. */
   private verifiedResolution: TPubGrubResult | null = null;
 
+  /* Если safe put не смог разрешить предложенный override, PubGrub уже
+   * оставил partial resolution. Следующий dangerousPut с теми же аргументами
+   * (явный Use anyway вызывающей стороны) должен применить mutation, не
+   * запуская тот же конфликтный resolve повторно. */
+  private failedPut: {
+    url: string;
+    range: string;
+    parent?: string;
+    resolution: TPubGrubResult;
+  } | null = null;
+
   private store = new EntryStore();
 
   private explicitModulesDir?: string;
@@ -333,6 +344,7 @@ export class SV {
     versionOrParent?: string,
     parentName?: string,
   ): Promise<void> => {
+    this.failedPut = null;
     const { range, parent } = parsePutArgs(versionOrParent, parentName);
     const baseJson = await pkgJSONManager.read();
 
@@ -350,11 +362,25 @@ export class SV {
       throw new SVError('ADDON_NOT_FOUND', { name: parent });
     }
 
-    const resolution = await this.verify(baseJson, {
-      parent,
-      add: moduleUrl,
-      version: range,
-    });
+    let resolution: TPubGrubResult;
+
+    try {
+      resolution = await this.verify(baseJson, {
+        parent,
+        add: moduleUrl,
+        version: range,
+      });
+    } catch (error) {
+      if (error instanceof SVError && error.error === 'VERSION_CONFLICT') {
+        this.failedPut = {
+          url: moduleUrl,
+          range,
+          parent,
+          resolution: this.resolution || {},
+        };
+      }
+      throw error;
+    }
 
     const previousResolution = this.resolution || {};
 
@@ -388,6 +414,15 @@ export class SV {
     const baseChanged = await this.prepareBaseJson(baseJson);
     const moduleUrl = await this.findModuleUrl(url, parent);
     const { name } = git.parseUrl(moduleUrl);
+    const failedPut = this.failedPut;
+    this.failedPut = null;
+
+    const failedResolution = failedPut
+      && failedPut.url === moduleUrl
+      && failedPut.range === range
+      && failedPut.parent === parent
+      ? failedPut.resolution
+      : null;
 
     const targetJson = parent
       ? await pkgJSONManager.read(parent)
@@ -426,9 +461,13 @@ export class SV {
 
     if (parent && baseChanged) await pkgJSONManager.write(baseJson);
 
-    await this.refreshBestEffortResolution(
-      parent ? baseJson : nextTargetJson,
-    );
+    if (failedResolution) {
+      this.resolution = failedResolution;
+    } else {
+      await this.refreshBestEffortResolution(
+        parent ? baseJson : nextTargetJson,
+      );
+    }
     await npm.install();
   };
 
