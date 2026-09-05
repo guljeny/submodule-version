@@ -252,6 +252,10 @@ export class SV {
 
     /* Сам вызов init переводит экземпляр в инициализированное состояние. */
     this.resolution = {};
+    /* Один экземпляр SV живёт до смены проекта. Повторный init выполняется
+     * только по явному Refresh и должен заново получить теги и manifests,
+     * а не резолвить сохранённый EntryStore. */
+    this.store.clear();
 
     const baseJson = await pkgJSONManager.read();
 

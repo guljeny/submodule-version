@@ -91,6 +91,17 @@ afterEach(() => {
 });
 
 describe('SV.init', () => {
+  it('refreshes cached package metadata on every init', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    const sv = new SV('/project');
+    const clear = jest.spyOn((sv as any).store, 'clear');
+
+    await sv.init();
+    await sv.init();
+
+    expect(clear).toHaveBeenCalledTimes(2);
+  });
+
   it('fails before resolving when package.json is missing', async () => {
     readMock.mockResolvedValue(null);
     const sv = new SV('/project');
