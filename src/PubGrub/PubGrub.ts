@@ -75,6 +75,10 @@ const findPath = (
 export class PubGrub {
   private entries = new Map<string, IPackageEntry>();
 
+  private resolution: TPubGrubResult = {};
+
+  private partialState: ISolverState | null = null;
+
   private incompatibilities: IIncompatibility[] = [];
 
   private incompatibilityKeys = new Set<string>();
@@ -85,6 +89,8 @@ export class PubGrub {
     rootDependencies: TDependencies,
   ): Promise<TPubGrubResult> => {
     this.entries = new Map();
+    this.resolution = {};
+    this.partialState = null;
     this.incompatibilities = [];
     this.incompatibilityKeys = new Set();
 
@@ -94,53 +100,96 @@ export class PubGrub {
       edges: new Map(),
     };
 
-    const roots = await Promise.all(
-      Object.entries(rootDependencies).map(async ([depPath, range]) => ({
-        entry: await this.load(depPath),
-        range: range || '*',
-      })),
-    );
+    this.rememberState(state);
 
-    roots.forEach(({ entry, range }) => {
-      this.assertConstraint(entry.name, range, ROOT);
-
-      const requirement = this.requirement(
-        entry.name,
-        range,
-        ROOT,
-        [ROOT, entry.name],
+    try {
+      const roots = await Promise.all(
+        Object.entries(rootDependencies).map(async ([depPath, range]) => ({
+          entry: await this.load(depPath),
+          range: range || '*',
+        })),
       );
 
-      this.addIncompatibility({
-        terms: [
-          { module: ROOT, range: ROOT_VERSION, positive: true },
-          { module: entry.name, range, positive: false },
-        ],
-        cause: { type: 'root', requirement },
+      roots.forEach(({ entry, range }) => {
+        this.assertConstraint(entry.name, range, ROOT);
+
+        const requirement = this.requirement(
+          entry.name,
+          range,
+          ROOT,
+          [ROOT, entry.name],
+        );
+
+        this.addIncompatibility({
+          terms: [
+            { module: ROOT, range: ROOT_VERSION, positive: true },
+            { module: entry.name, range, positive: false },
+          ],
+          cause: { type: 'root', requirement },
+        });
       });
-    });
 
-    const result = await this.search(state);
+      this.rememberState(state);
 
-    if (!result.ok) throw this.toError(result.conflict);
+      const result = await this.search(state);
 
-    return Object.fromEntries(
-      [...result.state.selected]
-        .filter(([name]) => name !== ROOT)
-        .map(([name, version]) => {
-          const entry = this.entries.get(name)!;
+      if (!result.ok) throw this.toError(result.conflict);
 
-          return [name, {
-            ...entry,
-            version,
-            dependencies: { ...entry.versions[version] },
-          }];
-        }),
-    );
+      this.resolution = this.makeResolution(result.state);
+
+      return this.resolution;
+    } catch (error) {
+      this.resolution = this.makeResolution(this.partialState, true);
+
+      throw error;
+    }
   };
 
+  public getResolution = (): TPubGrubResult => this.resolution;
+
+  private rememberState = (state: ISolverState): void => {
+    if (
+      this.partialState
+      && this.partialState.selected.size > state.selected.size
+    ) return;
+
+    this.partialState = cloneState(state);
+  };
+
+  private makeResolution = (
+    state: ISolverState | null,
+    includeUnselected = false,
+  ): TPubGrubResult => Object.fromEntries(
+    [...this.entries].flatMap(([name, entry]) => {
+      let version = state?.selected.get(name) || '';
+
+      if (!version && includeUnselected) {
+        if (!state?.requirements.has(name)) return [];
+
+        const ranges = (state?.requirements.get(name) || [])
+          .filter(requirement => requirement.positive)
+          .map(requirement => requirement.range);
+
+        version = versionUtil.latest(Object.keys(entry.versions), ranges)
+          || versionUtil.latest(Object.keys(entry.versions));
+      }
+
+      if (!version) return [];
+
+      return [[name, {
+        ...entry,
+        version,
+        dependencies: { ...entry.versions[version] },
+      }]];
+    }),
+  );
+
   private search = async (state: ISolverState): Promise<TSearchResult> => {
+    this.rememberState(state);
+
     const propagatedConflict = this.propagate(state);
+
+    this.rememberState(state);
 
     if (propagatedConflict) {
       this.learn(state, propagatedConflict);
@@ -190,12 +239,15 @@ export class PubGrub {
       const next = cloneState(state);
 
       next.selected.set(choice.name, version);
+      this.rememberState(next);
 
       const dependencyConflict = await this.addDependencies(
         next,
         choice.entry,
         version,
       );
+
+      this.rememberState(next);
 
       const result = dependencyConflict
         ? { ok: false as const, conflict: dependencyConflict }

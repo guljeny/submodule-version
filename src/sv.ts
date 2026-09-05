@@ -153,9 +153,19 @@ export class SV {
     return true;
   };
 
-  private resolveDeps = (
+  private resolveDeps = async (
     rootDeps: TDependencies,
-  ): Promise<TPubGrubResult> => new PubGrub(this.store).resolve(rootDeps);
+  ): Promise<TPubGrubResult> => {
+    const resolver = new PubGrub(this.store);
+
+    try {
+      return await resolver.resolve(rootDeps);
+    } catch (error) {
+      this.resolution = resolver.getResolution();
+
+      throw error;
+    }
+  };
 
   /*
    * Синк рабочей копии с резолвом: недостающие сабмодули добавляются,

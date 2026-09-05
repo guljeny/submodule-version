@@ -280,6 +280,39 @@ describe('PubGrub resolution', () => {
 });
 
 describe('PubGrub errors', () => {
+  it('keeps a best-effort resolution after a version conflict', async () => {
+    const fixture = source(ALL_MODULES);
+    const resolver = new PubGrub(fixture.store);
+
+    const dependencies = {
+      [ConflictA.url]: '^1.0.0',
+      [ConflictB.url]: '*',
+    };
+
+    await expect(resolver.resolve(dependencies)).rejects.toMatchObject({
+      error: 'VERSION_CONFLICT',
+    });
+
+    expect(selected(resolver.getResolution())).toEqual({
+      ConflictA: '1.0.0',
+      ConflictB: '1.0.0',
+    });
+  });
+
+  it('keeps an available version when the requested one does not exist',
+    async () => {
+      const fixture = source(ALL_MODULES);
+      const resolver = new PubGrub(fixture.store);
+
+      await expect(resolver.resolve({
+        [ExactA.url]: '9.0.0',
+      })).rejects.toMatchObject({ error: 'VERSION_CONFLICT' });
+
+      expect(selected(resolver.getResolution())).toEqual({
+        ExactA: '1.0.0',
+      });
+    });
+
   it('reports every requirement in a version conflict', async () => {
     const currentRoot = root
       .add(ConflictA, '^1.0.0')

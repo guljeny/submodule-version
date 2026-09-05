@@ -51,6 +51,7 @@ jest.mock('../npm', () => ({
 
 const PubGrubMock = PubGrub as unknown as jest.Mock;
 const resolveMock = jest.fn();
+const getResolutionMock = jest.fn();
 const readMock = pkgJSONManager.read as jest.Mock;
 const writeMock = pkgJSONManager.write as jest.Mock;
 const readFileMock = readFile as jest.Mock;
@@ -73,8 +74,12 @@ const entry = (
 beforeEach(() => {
   jest.clearAllMocks();
   jest.spyOn(console, 'log').mockImplementation(() => {});
-  PubGrubMock.mockImplementation(() => ({ resolve: resolveMock }));
+  PubGrubMock.mockImplementation(() => ({
+    resolve: resolveMock,
+    getResolution: getResolutionMock,
+  }));
   resolveMock.mockResolvedValue({});
+  getResolutionMock.mockReturnValue({});
   readFileMock.mockRejectedValue(new Error('ENOENT'));
   localMock.isGitRepo.mockResolvedValue(true);
   localMock.currentVersion.mockResolvedValue(null);
@@ -138,6 +143,21 @@ describe('SV.init', () => {
     await expect(sv.init()).rejects.toThrow('version conflict');
 
     expect(sv.getResolution()).toEqual({});
+  });
+
+  it('keeps PubGrub partial resolution on a version conflict', async () => {
+    const partial = {
+      A: entry('A', { '1.0.0': {} }, '1.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: { [url('A')]: '^2.0.0' } });
+    resolveMock.mockRejectedValue(new Error('version conflict'));
+    getResolutionMock.mockReturnValue(partial);
+    const sv = new SV('/project');
+
+    await expect(sv.init()).rejects.toThrow('version conflict');
+
+    expect(sv.getResolution()).toBe(partial);
   });
 
   it('keeps the resolution when git synchronization fails', async () => {
