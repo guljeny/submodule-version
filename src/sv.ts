@@ -602,7 +602,7 @@ export class SV {
 
     const tags = await git.local.tagsAtHead(dir);
 
-    return versionUtil.latest(tags) || null;
+    return versionUtil.sort(tags)[0] || null;
   };
 
   // eslint-disable-next-line class-methods-use-this
@@ -675,29 +675,37 @@ export class SV {
       await git.local.addRemote(dir, repoUrl);
     }
 
+    const versions = await git.local.listTags(dir);
     const currentTag = await this.currentVersion(module);
-    const latestKnown = await this.latestVersion(module);
+    const latestKnown = versionUtil.latest(versions) || '0.0.0';
+    const fromOldVersion = !!currentTag && currentTag !== latestKnown;
 
-    if (currentTag && latestKnown && currentTag !== latestKnown) {
-      throw new GitError('GIT_NOT_LATEST_VERSION');
+    const next = fromOldVersion
+      ? versionUtil.nextPatchVersion(currentTag, versions)
+      : versionUtil.bump(latestKnown, bump);
+
+    if (fromOldVersion) {
+      /* Старую стабильную линию не смешиваем с основной веткой: имя ветки
+       * совпадает с автоматически рассчитанной prerelease-версией. */
+      await git.local.createBranch(dir, next);
+    } else {
+      await git.local.ensureBranch(dir);
+
+      if (await git.local.isRemoteAhead(dir)) {
+        await git.local.pullRebaseAutostash(dir);
+      }
+
+      const dirty = await git.local.hasChanges(dir);
+      const headTag = await this.currentVersion(module);
+
+      if (!dirty && headTag) {
+        await git.local.push(dir, headTag);
+        this.store.clear();
+
+        return headTag;
+      }
     }
 
-    await git.local.ensureBranch(dir);
-
-    if (await git.local.isRemoteAhead(dir)) {
-      await git.local.pullRebaseAutostash(dir);
-    }
-
-    const dirty = await git.local.hasChanges(dir);
-    const headTag = await this.currentVersion(module);
-
-    if (!dirty && headTag) {
-      await git.local.push(dir, headTag);
-
-      return headTag;
-    }
-
-    const next = versionUtil.bump(await this.latestVersion(module), bump);
     const pkg = await pkgJSONManager.read(module);
 
     if (pkg) {
@@ -711,6 +719,9 @@ export class SV {
 
     await git.local.addTag(dir, next);
     await git.local.push(dir, next);
+    /* publish меняет набор доступных тегов вне EntryStore. Следующий put
+     * обязан загрузить новый каталог, а не получить snapshot до публикации. */
+    this.store.clear();
 
     return next;
   };

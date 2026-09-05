@@ -86,6 +86,29 @@ const bump = (
   return next;
 };
 
+/* Публикация с не последнего тега образует отдельную patch-линейку:
+ * 1.0.2 -> 1.0.2-patch.1, затем автоматически .2, .3 и т.д. */
+const nextPatchVersion = (version: string, versions: string[]): string => {
+  const parsed = semver.parse(version);
+
+  if (!parsed) throw new Error(`Invalid semantic version: ${version}`);
+
+  const base = `${parsed.major}.${parsed.minor}.${parsed.patch}`;
+  const prefix = `${base}-patch.`;
+
+  const numbers = versions.flatMap(candidate => {
+    if (!candidate.startsWith(prefix)) return [];
+
+    const value = candidate.slice(prefix.length);
+
+    return /^\d+$/.test(value) ? [Number(value)] : [];
+  });
+
+  const next = (numbers.length ? Math.max(...numbers) : 0) + 1;
+
+  return `${prefix}${next}`;
+};
+
 export const versionUtil = {
   normalizeConstraint,
   validate,
@@ -100,4 +123,5 @@ export const versionUtil = {
   intersects,
   isSubset,
   bump,
+  nextPatchVersion,
 };

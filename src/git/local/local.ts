@@ -261,6 +261,13 @@ export const local = {
     }
   },
 
+  createBranch: async (dir: string, branch: string): Promise<void> => {
+    await execAsync(
+      `git -C "${dir}" checkout -b ${JSON.stringify(branch)}`,
+      { cwd: RunOptions.cwd },
+    );
+  },
+
   commitAll: async (dir: string, message: string): Promise<void> => {
     await execAsync(
       `git -C "${dir}" add -A`,
@@ -288,7 +295,7 @@ export const local = {
 
     if (tag) {
       await execAsync(
-        `git -C "${dir}" push origin ${tag}`,
+        `git -C "${dir}" push origin refs/tags/${tag}`,
         { cwd: RunOptions.cwd },
       );
     }
@@ -368,7 +375,7 @@ export const local = {
     const module = path.join(RunOptions.modulesDir, name);
     const tags = await local.tagsAtHead(module);
 
-    return versionUtil.latest(tags) || null;
+    return versionUtil.sort(tags)[0] || null;
   },
 
   listTags: async (dir: string): Promise<string[]> => {

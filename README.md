@@ -168,10 +168,10 @@ Root-level overrides (without `parent`) are applied to a copy of `rootDeps` that
 
 ### Publishing
 
-- `sv.publish({ module?, repoUrl?, message?, bump })` - Commit, tag and push a new version of a module (or the project itself). Returns the published version.
+- `sv.publish({ module?, repoUrl?, message?, bump })` - Commit, tag and push a new version of a module (or the project itself). Returns the published version and invalidates cached repository metadata so the next resolution sees the new tag.
   - `bump: 'release' | 'minor' | 'major'` - How to bump the latest version (`1.2.3` → `1.2.4`, `1.3.0`, `2.0.0`)
   - For a module without a git remote, pass `repoUrl` — `sv` initializes the repo and sets the remote automatically
-  - Publishing is only possible from the latest version (`GIT_NOT_LATEST_VERSION` error otherwise)
+  - Publishing from the latest version uses `bump`. Publishing from an older tag automatically creates a branch and prerelease tag named `<version>-patch.N` (for example `1.0.2-patch.4`); `N` is the next unused number in that patch line
   - Submodules are checked out on tags (detached `HEAD`) — `publish` creates a local branch bound to the remote branch before committing, and syncs with the remote (`pull --rebase --autostash`) when it is ahead
   - If the working tree is clean and `HEAD` already has a version tag, `publish` just pushes the branch and the tag without bumping
 

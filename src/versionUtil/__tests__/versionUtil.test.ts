@@ -59,4 +59,20 @@ describe('versionUtil.bump', () => {
   ] as const)('bumps %s', (kind, expected) => {
     expect(versionUtil.bump('1.2.3', kind)).toBe(expected);
   });
+
+  it('increments the patch branch suffix for a non-latest release', () => {
+    expect(versionUtil.nextPatchVersion('1.0.2', [
+      '2.0.0',
+      '1.0.2-patch.1',
+      '1.0.2-patch.3',
+      '1.0.1-patch.9',
+    ])).toBe('1.0.2-patch.4');
+  });
+
+  it('continues the same patch line from a patch tag', () => {
+    expect(versionUtil.nextPatchVersion('1.0.2-patch.4', [
+      '2.0.0',
+      '1.0.2-patch.4',
+    ])).toBe('1.0.2-patch.5');
+  });
 });

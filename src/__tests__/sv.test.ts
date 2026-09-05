@@ -29,6 +29,19 @@ jest.mock('../git', () => {
         currentVersion: jest.fn(async () => null),
         listVersions: jest.fn(async () => []),
         getRemote: jest.fn(async () => null),
+        tagsAtHead: jest.fn(async () => []),
+        listTags: jest.fn(async () => []),
+        hasChanges: jest.fn(async () => false),
+        hasUnpushedCommits: jest.fn(async () => false),
+        ensureBranch: jest.fn(async () => undefined),
+        createBranch: jest.fn(async () => undefined),
+        isRemoteAhead: jest.fn(async () => false),
+        pullRebaseAutostash: jest.fn(async () => undefined),
+        commitAll: jest.fn(async () => undefined),
+        addTag: jest.fn(async () => undefined),
+        push: jest.fn(async () => undefined),
+        init: jest.fn(async () => undefined),
+        addRemote: jest.fn(async () => undefined),
       },
       api: {
         setToken: jest.fn(),
@@ -85,6 +98,11 @@ beforeEach(() => {
   localMock.isGitRepo.mockResolvedValue(true);
   localMock.currentVersion.mockResolvedValue(null);
   localMock.listVersions.mockResolvedValue([]);
+  localMock.tagsAtHead.mockResolvedValue([]);
+  localMock.listTags.mockResolvedValue([]);
+  localMock.hasChanges.mockResolvedValue(false);
+  localMock.hasUnpushedCommits.mockResolvedValue(false);
+  localMock.isRemoteAhead.mockResolvedValue(false);
 });
 
 afterEach(() => {
@@ -775,4 +793,89 @@ describe('SV.listVersions', () => {
       }),
     );
   });
+});
+
+describe('SV.publish', () => {
+  it(
+    'publishes an old version on the next automatic patch branch',
+    async () => {
+    const versions = [
+      '2.0.0',
+      '1.0.2',
+      '1.0.2-patch.1',
+      '1.0.2-patch.3',
+    ];
+
+    localMock.getRemote.mockResolvedValue(url('A'));
+    localMock.tagsAtHead.mockResolvedValue(['1.0.2']);
+    localMock.listTags.mockResolvedValue(versions);
+    localMock.hasChanges.mockResolvedValue(true);
+    readMock.mockResolvedValue({ version: '1.0.2', sv: {} });
+    const sv = new SV('/project');
+    const clear = jest.spyOn((sv as any).store, 'clear');
+
+    await expect(sv.publish({
+      module: 'A',
+      /* Старый релиз игнорирует выбранный bump. */
+      bump: 'major',
+      message: 'backport fix',
+    })).resolves.toBe('1.0.2-patch.4');
+
+    expect(localMock.createBranch).toHaveBeenCalledWith(
+      'modules/A',
+      '1.0.2-patch.4',
+    );
+    expect(localMock.ensureBranch).not.toHaveBeenCalled();
+    expect(writeMock).toHaveBeenCalledWith({
+      version: '1.0.2-patch.4',
+      sv: {},
+    }, 'A');
+    expect(localMock.commitAll).toHaveBeenCalledWith(
+      'modules/A',
+      'backport fix',
+    );
+    expect(localMock.addTag).toHaveBeenCalledWith(
+      'modules/A',
+      '1.0.2-patch.4',
+    );
+    expect(localMock.push).toHaveBeenCalledWith(
+      'modules/A',
+      '1.0.2-patch.4',
+    );
+    expect(clear).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it(
+    'continues a patch line and commits the generated version',
+    async () => {
+    localMock.getRemote.mockResolvedValue(url('A'));
+    localMock.tagsAtHead.mockResolvedValue(['1.0.2-patch.4']);
+    localMock.listTags.mockResolvedValue([
+      '2.0.0',
+      '1.0.2',
+      '1.0.2-patch.4',
+    ]);
+    localMock.hasChanges.mockResolvedValue(true);
+    readMock.mockResolvedValue({ version: '1.0.2-patch.4' });
+    const sv = new SV('/project');
+
+    await expect(sv.publish({
+      module: 'A',
+      bump: 'release',
+    })).resolves.toBe('1.0.2-patch.5');
+
+    expect(localMock.createBranch).toHaveBeenCalledWith(
+      'modules/A',
+      '1.0.2-patch.5',
+    );
+    expect(writeMock).toHaveBeenCalledWith({
+      version: '1.0.2-patch.5',
+    }, 'A');
+    expect(localMock.commitAll).toHaveBeenCalledWith(
+      'modules/A',
+      'Update',
+    );
+    },
+  );
 });
