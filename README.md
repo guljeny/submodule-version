@@ -82,8 +82,8 @@ Or use the [`publish`](#programmatic-api) API, which bumps the version, commits,
 ## Commands
 
 - `npx sv` - Resolve, validate and install/sync all modules (default command)
-- `npx sv put <url> [target] [--ver 1.2.0]` - Install a submodule or change its version (`install`, `i`). Without `target` the module is installed in the project root; `target` is a parent module name. Without `--ver` the highest possible version is selected (as if `'*'` was passed)
-- `npx sv delete <path>` - Delete a submodule from its parent (project root when the path is a plain name) by path (`remove`, `r`)
+- `npx sv put <url> [target] [--ver 1.2.0] [--no-verify]` - Install a submodule or change its version (`install`, `i`). Without `target` the module is installed in the project root; `target` is a parent module name. Without `--ver` the highest possible version is selected (as if `'*'` was passed). `--no-verify` applies the Git/package.json/npm mutation without PubGrub compatibility checks
+- `npx sv delete <path> [--no-verify]` - Delete a submodule from its parent (project root when the path is a plain name) by path (`remove`, `r`). `--no-verify` skips PubGrub compatibility checks
 - `npx sv list-versions [name] [--installed]` - List available versions of one module, or of every resolved module when `name` is omitted (`ls`). With `--installed` shows the versions actually checked out in the submodules
 - `npx sv update [path]` - Update modules to the latest allowed versions, all of them or a single one by path (`u`)
 - `npx sv publish [module] [--bump release|minor|major] [-m message] [--repo-url git_url]` - Commit, tag and push a new version of a module (or the project itself when `module` is omitted). `--repo-url` is required for the first publish of a module without a git remote (`p`)
@@ -116,13 +116,14 @@ The constructor accepts `(projectDir, modulesDir?, { githubToken? })`. The modul
 
 ### Installing, updating and deleting modules
 
-All mutations first run a check resolve and touch the working tree and `package.json` files only when the resolution succeeds.
+By default, `put` and `delete` first run a check resolve and touch the working tree and `package.json` files only when the resolution succeeds. The explicit `dangerous*` variants skip that check.
 
 - `sv.put(url, version?, parentName?)` - Install a module or change its version. Instead of `url` you can pass the name of an already installed module. All argument forms are supported: `put(url)`, `put(url, version)`, `put(url, parentName)`, `put(url, version, parentName)`.
   - Without `parentName` the module is installed/updated in the project root and the range is written to the root `package.json#sv`.
   - With `parentName` the module is added to (or updated in) the parent module and the range is written to the parent's own `package.json#sv`, so the change survives publishing the parent.
   - Without `version` the highest possible version is selected, as if `'*'` was passed.
 - `sv.delete(name, parentName?)` - Delete a module from its parent (the project root when `parentName` is omitted); the dependency is removed from the corresponding `package.json#sv` and the submodule is uninstalled.
+- `sv.dangerousPut(url, version?, parentName?)` and `sv.dangerousDelete(name, parentName?)` perform the same Git, `package.json` and `npm install` mutations without running PubGrub. `dangerousPut` keeps the submodule's current Git HEAD and records the requested range for a later verified resolve.
 - `sv.listVersions(name?)` - With `name` returns the available versions of one package (`string[]`); without it returns `{ [pkgName]: string[] }` for every resolved package.
 
 ### Simulating changes

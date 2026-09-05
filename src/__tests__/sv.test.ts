@@ -26,6 +26,7 @@ jest.mock('../git', () => {
         checkout: jest.fn(async () => undefined),
         rm: jest.fn(async () => undefined),
         currentVersion: jest.fn(async () => null),
+        getRemote: jest.fn(async () => null),
       },
       api: {
         setToken: jest.fn(),
@@ -262,6 +263,7 @@ describe('SV.put', () => {
     expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^1.2.0' });
     expect(writeMock).toHaveBeenCalledWith({
       sv: { [url('B')]: '^1.2.0' },
+      workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
     expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
@@ -280,6 +282,7 @@ describe('SV.put', () => {
     expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '*' });
     expect(writeMock).toHaveBeenCalledWith({
       sv: { [url('B')]: '*' },
+      workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
   });
@@ -387,6 +390,72 @@ describe('SV.put', () => {
 
     await expect(sv.put(url('B'))).rejects.toThrow('npm failed');
   });
+
+  it('delegates the verified mutation to dangerousPut', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue({});
+    const sv = new SV('/project');
+
+    const dangerousPut = jest.spyOn(sv, 'dangerousPut')
+      .mockResolvedValue(undefined);
+
+    await sv.put(url('B'), '^1.0.0');
+
+    expect(dangerousPut).toHaveBeenCalledWith(
+      url('B'),
+      '^1.0.0',
+      undefined,
+    );
+  });
+});
+
+describe('SV.dangerousPut', () => {
+  it('adds and records a module without calling PubGrub', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    localMock.isGitRepo.mockResolvedValue(false);
+    resolveMock.mockRejectedValue(new Error('version conflict'));
+    const sv = new SV('/project');
+
+    await sv.dangerousPut(url('B'), '^2.0.0');
+
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
+    expect(localMock.checkout).not.toHaveBeenCalled();
+    expect(writeMock).toHaveBeenCalledWith({
+      sv: { [url('B')]: '^2.0.0' },
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+    expect(npmInstallMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves an installed module name from package.json without init',
+    async () => {
+      readMock.mockResolvedValue({ sv: { [url('B')]: '^1.0.0' } });
+      const sv = new SV('/project');
+
+      await sv.dangerousPut('B', '^2.0.0');
+
+      expect(writeMock).toHaveBeenCalledWith({
+        sv: { [url('B')]: '^2.0.0' },
+        workspaces: ['modules/*'],
+        'sv-dir': 'modules',
+      });
+      expect(resolveMock).not.toHaveBeenCalled();
+    });
+
+  it('uses the recorded modules dir before touching git', async () => {
+    readMock.mockResolvedValue({
+      sv: {},
+      workspaces: ['addons/*'],
+      'sv-dir': 'addons',
+    });
+    const sv = new SV('/project');
+
+    await sv.dangerousPut(url('B'));
+
+    expect(localMock.isGitRepo).toHaveBeenCalledWith('addons/B');
+  });
 });
 
 describe('SV.delete', () => {
@@ -462,6 +531,51 @@ describe('SV.delete', () => {
     });
     /* resolve не вызывался повторно — только внутри init */
     expect(resolveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('delegates the verified mutation to dangerousDelete', async () => {
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockResolvedValue({});
+    const sv = new SV('/project');
+
+    const dangerousDelete = jest.spyOn(sv, 'dangerousDelete')
+      .mockResolvedValue(undefined);
+
+    await sv.delete('A');
+
+    expect(dangerousDelete).toHaveBeenCalledWith('A', undefined);
+  });
+});
+
+describe('SV.dangerousDelete', () => {
+  it('removes and records a module without calling PubGrub', async () => {
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockRejectedValue(new Error('version conflict'));
+    const sv = new SV('/project');
+
+    await sv.dangerousDelete('A');
+
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(localMock.rm).toHaveBeenCalledWith('A');
+    expect(writeMock).toHaveBeenCalledWith({
+      sv: {},
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+    expect(npmInstallMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch git when the dependency is missing', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    const sv = new SV('/project');
+
+    await expect(sv.dangerousDelete('Ghost')).rejects.toMatchObject({
+      error: 'ADDON_NOT_FOUND',
+      details: { name: 'Ghost' },
+    });
+    expect(localMock.rm).not.toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
   });
 });
 

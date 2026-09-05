@@ -19,15 +19,8 @@ import { SVError } from './errors';
  * мутации обязаны пережить публикацию родителя, поэтому диапазон
  * пишется в его поле sv.
  */
-const updateModuleJson = async (
-  parent: string,
-  override: IOverride,
-): Promise<void> => {
-  const parentJson = await pkgJSONManager.read(parent);
-
-  if (!parentJson) throw new SVError('ADDON_NOT_FOUND', { name: parent });
-
-  const sv = { ...((parentJson.sv || {}) as TDependencies) };
+const applyOverride = (json: any, override: IOverride): any => {
+  const sv = { ...((json.sv || {}) as TDependencies) };
 
   if (override.add) sv[override.add] = override.version || '*';
 
@@ -40,8 +33,7 @@ const updateModuleJson = async (
     delete sv[key];
   }
 
-  parentJson.sv = sv;
-  await pkgJSONManager.write(parentJson, parent);
+  return { ...json, sv };
 };
 
 /*
@@ -77,6 +69,19 @@ const ensureWorkspaces = (baseJson: any): boolean => {
 
 const MODULES_DIR_FIELD = 'sv-dir';
 const DEFAULT_MODULES_DIR = 'modules';
+
+const parsePutArgs = (
+  versionOrParent?: string,
+  parentName?: string,
+): { range: string, parent?: string } => {
+  const isVersion = !!versionOrParent
+    && versionUtil.validate(versionOrParent, true);
+
+  return {
+    range: (isVersion ? versionOrParent : undefined) || '*',
+    parent: (isVersion ? parentName : versionOrParent) || undefined,
+  };
+};
 
 /*
  * Уже добавленные сабмодули — источник правды о директории:
@@ -183,48 +188,50 @@ export class SV {
     return changed;
   };
 
-  /*
-   * Общий путь мутаций: проверка через resolve внутри simulate, и только
-   * если ошибки нет — установка/переключение модулей и правка package.json
-   * (корня или родителя).
-   */
-  private apply = async (
+  private verify = async (
     baseJson: any,
     override: IOverride,
-    parent?: string,
-  ): Promise<void> => {
-    const dirChanged = await this.syncModulesDir(baseJson);
+  ): Promise<TPubGrubResult> => {
     const rootDeps = (baseJson.sv || {}) as TDependencies;
-    let nextRootDeps = rootDeps;
 
-    const resolution = await this.store.simulate(
+    return this.store.simulate(
       [override],
       rootDeps,
-      deps => {
-        nextRootDeps = deps;
+      deps => this.resolveDeps(deps),
+    );
+  };
 
-        return this.resolveDeps(deps);
-      },
+  private findModuleUrl = async (
+    urlOrName: string,
+    parent?: string,
+  ): Promise<string> => {
+    if (git.parseUrl(urlOrName).name) return urlOrName;
+
+    const resolved = this.resolution?.[urlOrName];
+
+    if (resolved) return resolved.url;
+
+    const targetJson = await pkgJSONManager.read(parent);
+
+    const existing = Object.keys((targetJson?.sv || {}) as TDependencies)
+      .find(depUrl => git.parseUrl(depUrl).name === urlOrName);
+
+    if (existing) return existing;
+
+    const remote = await git.local.getRemote(
+      path.join(RunOptions.modulesDir, urlOrName),
     );
 
-    await this.syncModules(resolution);
+    if (remote && git.parseUrl(remote).name) return remote;
 
-    if (parent) {
-      await updateModuleJson(parent, override);
+    throw new SVError('NOT_A_GIT_URL', { url: urlOrName });
+  };
 
-      if (dirChanged) await pkgJSONManager.write(baseJson);
-    } else {
-      baseJson.sv = nextRootDeps;
-      await pkgJSONManager.write(baseJson);
-    }
+  private prepareBaseJson = async (baseJson: any): Promise<boolean> => {
+    const dirChanged = await this.syncModulesDir(baseJson);
+    const workspaceChanged = ensureWorkspaces(baseJson);
 
-    /*
-     * package.json уже записан — npm подтянет workspaces и зависимости
-     * нового набора модулей.
-     */
-    await npm.install();
-
-    this.resolution = resolution;
+    return dirChanged || workspaceChanged;
   };
 
   public init = async (): Promise<void> => {
@@ -274,38 +281,79 @@ export class SV {
     versionOrParent?: string,
     parentName?: string,
   ): Promise<void> => {
-    const isVersion = !!versionOrParent
-      && versionUtil.validate(versionOrParent, true);
-
-    const range = (isVersion ? versionOrParent : undefined) || '*';
-    const parent = (isVersion ? parentName : versionOrParent) || undefined;
+    const { range, parent } = parsePutArgs(versionOrParent, parentName);
     const baseJson = await pkgJSONManager.read();
 
     if (!baseJson) throw new SVError('NOT_A_NPM');
+
+    await this.syncModulesDir(baseJson);
 
     /*
      * Вместо url можно передать имя уже установленного модуля —
      * url берём из текущего резолва.
      */
-    let moduleUrl = url;
-
-    if (!git.parseUrl(url).name) {
-      const existing = this.getResolution()[url];
-
-      if (!existing) throw new SVError('NOT_A_GIT_URL', { url });
-
-      moduleUrl = existing.url;
-    }
+    const moduleUrl = await this.findModuleUrl(url, parent);
 
     if (parent && !this.getResolution()[parent]) {
       throw new SVError('ADDON_NOT_FOUND', { name: parent });
     }
 
-    await this.apply(
-      baseJson,
-      { parent, add: moduleUrl, version: range },
+    const resolution = await this.verify(baseJson, {
       parent,
+      add: moduleUrl,
+      version: range,
+    });
+
+    await this.syncModules(resolution);
+    await this.dangerousPut(moduleUrl, range, parent);
+    this.resolution = resolution;
+  };
+
+  /*
+   * Принудительная установка без PubGrub: добавляет отсутствующий git
+   * submodule, записывает constraint и запускает npm install. Версию HEAD
+   * не переключает — диапазон лишь фиксируется для следующего safe resolve.
+   */
+  public dangerousPut = async (
+    url: string,
+    versionOrParent?: string,
+    parentName?: string,
+  ): Promise<void> => {
+    const { range, parent } = parsePutArgs(versionOrParent, parentName);
+    const baseJson = await pkgJSONManager.read();
+
+    if (!baseJson) throw new SVError('NOT_A_NPM');
+
+    const baseChanged = await this.prepareBaseJson(baseJson);
+    const moduleUrl = await this.findModuleUrl(url, parent);
+    const { name } = git.parseUrl(moduleUrl);
+
+    const targetJson = parent
+      ? await pkgJSONManager.read(parent)
+      : baseJson;
+
+    if (!targetJson) throw new SVError('ADDON_NOT_FOUND', { name: parent });
+
+    /* Проверяем запись до git-мутации, чтобы не оставить лишний submodule. */
+    const nextTargetJson = applyOverride(
+      targetJson,
+      { parent, add: moduleUrl, version: range },
     );
+
+    if (!await git.local.isGitRepo(path.join(RunOptions.modulesDir, name))) {
+      await git.local.addSubmodule(moduleUrl);
+    }
+
+    if (parent) {
+      await pkgJSONManager.write(nextTargetJson, parent);
+    } else {
+      await pkgJSONManager.write(nextTargetJson);
+    }
+
+    if (parent && baseChanged) await pkgJSONManager.write(baseJson);
+
+    this.resolution = null;
+    await npm.install();
   };
 
   /* Удаление модуля из родителя (без parentName — из корня проекта). */
@@ -313,6 +361,8 @@ export class SV {
     const baseJson = await pkgJSONManager.read();
 
     if (!baseJson) throw new SVError('NOT_A_NPM');
+
+    await this.syncModulesDir(baseJson);
 
     if (parentName) {
       const parentEntry = this.getResolution()[parentName];
@@ -326,11 +376,49 @@ export class SV {
       }
     }
 
-    await this.apply(
-      baseJson,
-      { parent: parentName, delete: name },
-      parentName,
-    );
+    const override = { parent: parentName, delete: name };
+    const resolution = await this.verify(baseJson, override);
+
+    await this.syncModules(resolution);
+    await this.dangerousDelete(name, parentName);
+    this.resolution = resolution;
+  };
+
+  /* Принудительное удаление без запуска PubGrub. */
+  public dangerousDelete = async (
+    name: string,
+    parentName?: string,
+  ): Promise<void> => {
+    const baseJson = await pkgJSONManager.read();
+
+    if (!baseJson) throw new SVError('NOT_A_NPM');
+
+    const baseChanged = await this.prepareBaseJson(baseJson);
+
+    const targetJson = parentName
+      ? await pkgJSONManager.read(parentName)
+      : baseJson;
+
+    if (!targetJson) {
+      throw new SVError('ADDON_NOT_FOUND', { name: parentName });
+    }
+
+    const override = { parent: parentName, delete: name };
+    /* Проверяем запись до git-мутации, чтобы неизвестное имя было no-op. */
+    const nextTargetJson = applyOverride(targetJson, override);
+    const dir = path.join(RunOptions.modulesDir, name);
+
+    if (await git.local.isGitRepo(dir)) await git.local.rm(name);
+
+    if (parentName) {
+      await pkgJSONManager.write(nextTargetJson, parentName);
+    } else {
+      await pkgJSONManager.write(nextTargetJson);
+    }
+
+    if (parentName && baseChanged) await pkgJSONManager.write(baseJson);
+    this.resolution = null;
+    await npm.install();
   };
 
   public listVersions = (

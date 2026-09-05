@@ -20,7 +20,7 @@ const makeEvent = (
 
   try {
     /* publish умеет работать с ещё не git/npm-инициализированным проектом */
-    if (!skipInit) {
+    if (!skipInit && arg.verify !== false) {
       await sv.init();
     }
 
@@ -31,13 +31,16 @@ const makeEvent = (
 };
 
 const put = makeEvent(async (sv, arg) => {
-  const { url: gitUrl, target, ver } = arg as {
+  const { url: gitUrl, target, ver, verify } = arg as {
     url: string,
     target?: string,
     ver?: string,
+    verify?: boolean,
   };
 
-  await sv.put(gitUrl, ver || target, ver ? target : undefined);
+  const method = verify === false ? sv.dangerousPut : sv.put;
+
+  await method(gitUrl, ver || target, ver ? target : undefined);
 });
 
 const update = makeEvent(async (sv, arg) => {
@@ -59,10 +62,15 @@ const update = makeEvent(async (sv, arg) => {
 });
 
 const del = makeEvent(async (sv, arg) => {
-  const { path: modulePath } = arg as {path: string};
+  const { path: modulePath, verify } = arg as {
+    path: string,
+    verify?: boolean,
+  };
   const { name, parent } = splitPath(modulePath);
 
-  await sv.delete(name, parent);
+  const method = verify === false ? sv.dangerousDelete : sv.delete;
+
+  await method(name, parent);
 });
 
 const listVersions = makeEvent(async (sv, arg) => {
@@ -162,6 +170,10 @@ export const s = yargs.scriptName('sv')
       type: 'string',
       alias: 'v',
       describe: 'Version to install',
+    }).option('verify', {
+      type: 'boolean',
+      default: true,
+      describe: 'Verify dependency versions (disable with --no-verify)',
     }),
     put,
   )
@@ -171,6 +183,10 @@ export const s = yargs.scriptName('sv')
     y => y.positional('path', {
       type: 'string',
       describe: 'Submodule path (A.B.C)',
+    }).option('verify', {
+      type: 'boolean',
+      default: true,
+      describe: 'Verify dependency versions (disable with --no-verify)',
     }),
     del,
   )
