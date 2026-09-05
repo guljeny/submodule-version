@@ -108,6 +108,9 @@ const deriveModulesDir = async (): Promise<string | null> => {
 export class SV {
   private resolution: TPubGrubResult | null = null;
 
+  /* Safe put передаёт сюда уже выбранную PubGrub версию на время мутации. */
+  private verifiedResolution: TPubGrubResult | null = null;
+
   private store = new EntryStore();
 
   private explicitModulesDir?: string;
@@ -305,14 +308,20 @@ export class SV {
     });
 
     await this.syncModules(resolution);
-    await this.dangerousPut(moduleUrl, range, parent);
-    this.resolution = resolution;
+    this.verifiedResolution = resolution;
+
+    try {
+      await this.dangerousPut(moduleUrl, range, parent);
+      this.resolution = resolution;
+    } finally {
+      this.verifiedResolution = null;
+    }
   };
 
   /*
    * Принудительная установка без PubGrub: добавляет отсутствующий git
-   * submodule, записывает constraint и запускает npm install. Версию HEAD
-   * не переключает — диапазон лишь фиксируется для следующего safe resolve.
+   * submodule, выбирает подходящий range git-тег, записывает constraint и
+   * запускает npm install. Совместимость с остальным деревом не проверяется.
    */
   public dangerousPut = async (
     url: string,
@@ -342,6 +351,19 @@ export class SV {
 
     if (!await git.local.isGitRepo(path.join(RunOptions.modulesDir, name))) {
       await git.local.addSubmodule(moduleUrl);
+    }
+
+    const verifiedVersion = this.verifiedResolution?.[name]?.version;
+
+    const versions = verifiedVersion
+      ? []
+      : await git.local.listVersions(name);
+
+    const version = verifiedVersion
+      || versionUtil.latest(versions, [range]);
+
+    if (version && await git.local.currentVersion(name) !== version) {
+      await git.local.checkout(name, version);
     }
 
     if (parent) {

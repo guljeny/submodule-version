@@ -26,6 +26,7 @@ jest.mock('../git', () => {
         checkout: jest.fn(async () => undefined),
         rm: jest.fn(async () => undefined),
         currentVersion: jest.fn(async () => null),
+        listVersions: jest.fn(async () => []),
         getRemote: jest.fn(async () => null),
       },
       api: {
@@ -77,6 +78,7 @@ beforeEach(() => {
   readFileMock.mockRejectedValue(new Error('ENOENT'));
   localMock.isGitRepo.mockResolvedValue(true);
   localMock.currentVersion.mockResolvedValue(null);
+  localMock.listVersions.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -413,6 +415,7 @@ describe('SV.dangerousPut', () => {
   it('adds and records a module without calling PubGrub', async () => {
     readMock.mockResolvedValue({ sv: {} });
     localMock.isGitRepo.mockResolvedValue(false);
+    localMock.listVersions.mockResolvedValue(['1.9.0', '2.0.0', '2.1.0']);
     resolveMock.mockRejectedValue(new Error('version conflict'));
     const sv = new SV('/project');
 
@@ -420,7 +423,7 @@ describe('SV.dangerousPut', () => {
 
     expect(resolveMock).not.toHaveBeenCalled();
     expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
-    expect(localMock.checkout).not.toHaveBeenCalled();
+    expect(localMock.checkout).toHaveBeenCalledWith('B', '2.1.0');
     expect(writeMock).toHaveBeenCalledWith({
       sv: { [url('B')]: '^2.0.0' },
       workspaces: ['modules/*'],
@@ -428,6 +431,21 @@ describe('SV.dangerousPut', () => {
     });
     expect(npmInstallMock).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps an untagged module installed when no version matches',
+    async () => {
+      readMock.mockResolvedValue({ sv: {} });
+      localMock.isGitRepo.mockResolvedValue(false);
+      localMock.listVersions.mockResolvedValue([]);
+      const sv = new SV('/project');
+
+      await sv.dangerousPut(url('B'), '^2.0.0');
+
+      expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
+      expect(localMock.checkout).not.toHaveBeenCalled();
+      expect(writeMock).toHaveBeenCalled();
+      expect(npmInstallMock).toHaveBeenCalled();
+    });
 
   it('resolves an installed module name from package.json without init',
     async () => {

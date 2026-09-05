@@ -123,7 +123,7 @@ By default, `put` and `delete` first run a check resolve and touch the working t
   - With `parentName` the module is added to (or updated in) the parent module and the range is written to the parent's own `package.json#sv`, so the change survives publishing the parent.
   - Without `version` the highest possible version is selected, as if `'*'` was passed.
 - `sv.delete(name, parentName?)` - Delete a module from its parent (the project root when `parentName` is omitted); the dependency is removed from the corresponding `package.json#sv` and the submodule is uninstalled.
-- `sv.dangerousPut(url, version?, parentName?)` and `sv.dangerousDelete(name, parentName?)` perform the same Git, `package.json` and `npm install` mutations without running PubGrub. `dangerousPut` keeps the submodule's current Git HEAD and records the requested range for a later verified resolve.
+- `sv.dangerousPut(url, version?, parentName?)` and `sv.dangerousDelete(name, parentName?)` perform the same Git, `package.json` and `npm install` mutations without running PubGrub. `dangerousPut` checks out the newest local Git tag matching the requested range, ignoring compatibility with the rest of the dependency tree; an untagged module remains on its cloned HEAD.
 - `sv.listVersions(name?)` - With `name` returns the available versions of one package (`string[]`); without it returns `{ [pkgName]: string[] }` for every resolved package.
 
 ### Simulating changes
