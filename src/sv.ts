@@ -164,8 +164,8 @@ export class SV {
    */
   private syncModules = async (
     resolution: TPubGrubResult,
+    previous: TPubGrubResult = this.resolution || {},
   ): Promise<boolean> => {
-    const previous = this.resolution || {};
     let changed = false;
 
     await Promise.all(Object.entries(resolution).map(async ([name, entry]) => {
@@ -238,6 +238,11 @@ export class SV {
   };
 
   public init = async (): Promise<void> => {
+    const previousResolution = this.resolution || {};
+
+    /* Сам вызов init переводит экземпляр в инициализированное состояние. */
+    this.resolution = {};
+
     const baseJson = await pkgJSONManager.read();
 
     if (!baseJson) throw new SVError('NOT_A_NPM');
@@ -255,7 +260,14 @@ export class SV {
 
     const rootDeps = (baseJson.sv || {}) as TDependencies;
     const resolution = await this.resolveDeps(rootDeps);
-    const modulesChanged = await this.syncModules(resolution);
+
+    /* Результат доступен даже при последующей ошибке git или npm. */
+    this.resolution = resolution;
+
+    const modulesChanged = await this.syncModules(
+      resolution,
+      previousResolution,
+    );
 
     /*
      * npm install запускается только когда реально что-то изменилось —
@@ -264,7 +276,6 @@ export class SV {
      */
     if (jsonChanged || modulesChanged) await npm.install();
 
-    this.resolution = resolution;
   };
 
   public getResolution = (): TPubGrubResult => {
@@ -307,14 +318,17 @@ export class SV {
       version: range,
     });
 
-    await this.syncModules(resolution);
+    const previousResolution = this.resolution || {};
+
+    this.resolution = resolution;
+    await this.syncModules(resolution, previousResolution);
     this.verifiedResolution = resolution;
 
     try {
       await this.dangerousPut(moduleUrl, range, parent);
-      this.resolution = resolution;
     } finally {
       this.verifiedResolution = null;
+      this.resolution = resolution;
     }
   };
 
@@ -400,10 +414,16 @@ export class SV {
 
     const override = { parent: parentName, delete: name };
     const resolution = await this.verify(baseJson, override);
+    const previousResolution = this.resolution || {};
 
-    await this.syncModules(resolution);
-    await this.dangerousDelete(name, parentName);
     this.resolution = resolution;
+
+    try {
+      await this.syncModules(resolution, previousResolution);
+      await this.dangerousDelete(name, parentName);
+    } finally {
+      this.resolution = resolution;
+    }
   };
 
   /* Принудительное удаление без запуска PubGrub. */
@@ -430,7 +450,13 @@ export class SV {
     const nextTargetJson = applyOverride(targetJson, override);
     const dir = path.join(RunOptions.modulesDir, name);
 
-    if (await git.local.isGitRepo(dir)) await git.local.rm(name);
+    /* При удалении связи parent -> dependency сам модуль может оставаться
+     * корневой зависимостью или использоваться другим аддоном. Проверенный
+     * delete уже синхронизировал resolution выше, а dangerous fallback без
+     * PubGrub не может безопасно признать общий модуль осиротевшим. */
+    if (!parentName && await git.local.isGitRepo(dir)) {
+      await git.local.rm(name);
+    }
 
     if (parentName) {
       await pkgJSONManager.write(nextTargetJson, parentName);

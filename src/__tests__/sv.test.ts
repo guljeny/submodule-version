@@ -130,6 +130,49 @@ describe('SV.init', () => {
     );
   });
 
+  it('is initialized with an empty resolution when resolve fails', async () => {
+    readMock.mockResolvedValue({ sv: { [url('A')]: '^2.0.0' } });
+    resolveMock.mockRejectedValue(new Error('version conflict'));
+    const sv = new SV('/project');
+
+    await expect(sv.init()).rejects.toThrow('version conflict');
+
+    expect(sv.getResolution()).toEqual({});
+  });
+
+  it('keeps the resolution when git synchronization fails', async () => {
+    const result = {
+      A: entry('A', { '1.0.0': {} }, '1.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockResolvedValue(result);
+    localMock.isGitRepo.mockImplementation(
+      async (dir: string) => dir === '/project',
+    );
+    localMock.addSubmodule.mockRejectedValueOnce(new Error('git failed'));
+    const sv = new SV('/project');
+
+    await expect(sv.init()).rejects.toThrow('git failed');
+
+    expect(sv.getResolution()).toBe(result);
+  });
+
+  it('keeps the resolution when npm install fails', async () => {
+    const result = {
+      A: entry('A', { '1.0.0': {} }, '1.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockResolvedValue(result);
+    npmInstallMock.mockRejectedValueOnce(new Error('npm failed'));
+    const sv = new SV('/project');
+
+    await expect(sv.init()).rejects.toThrow('npm failed');
+
+    expect(sv.getResolution()).toBe(result);
+  });
+
   it('adds the modules dir to package.json workspaces', async () => {
     readMock.mockResolvedValue({ sv: {} });
     resolveMock.mockResolvedValue({});
@@ -582,6 +625,24 @@ describe('SV.dangerousDelete', () => {
     });
     expect(npmInstallMock).toHaveBeenCalledTimes(1);
   });
+
+  it(
+    'removes only the parent dependency and keeps the shared module',
+    async () => {
+      readMock.mockImplementation(async (module?: string) => (
+        module === 'A'
+          ? { sv: { [url('B')]: '^1.0.0' } }
+          : { sv: { [url('A')]: '*', [url('B')]: '*' } }
+      ));
+      const sv = new SV('/project');
+
+      await sv.dangerousDelete('B', 'A');
+
+      expect(localMock.rm).not.toHaveBeenCalled();
+      expect(writeMock).toHaveBeenCalledWith({ sv: {} }, 'A');
+      expect(npmInstallMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('does not touch git when the dependency is missing', async () => {
     readMock.mockResolvedValue({ sv: {} });
