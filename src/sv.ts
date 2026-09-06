@@ -469,7 +469,17 @@ export class SV {
     if (parent && baseChanged) await pkgJSONManager.write(baseJson);
 
     if (failedResolution) {
-      this.resolution = failedResolution;
+      const entry = failedResolution[name];
+      this.resolution = version && entry?.versions[version]
+        ? {
+          ...failedResolution,
+          [name]: {
+            ...entry,
+            version,
+            dependencies: { ...entry.versions[version] },
+          },
+        }
+        : failedResolution;
     } else {
       await this.refreshBestEffortResolution(
         parent ? baseJson : nextTargetJson,

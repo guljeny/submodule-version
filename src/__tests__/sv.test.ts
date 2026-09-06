@@ -545,6 +545,32 @@ describe('SV.dangerousPut', () => {
       expect(npmInstallMock).toHaveBeenCalledTimes(1);
     });
 
+  it('updates the failed put resolution to the version selected by dangerousPut',
+    async () => {
+      const partial = {
+        B: entry('B', {
+          '1.9.0': {},
+          '2.1.0': { A: '^1.0.0' },
+        }, '1.9.0'),
+      };
+
+      readMock.mockResolvedValue({ sv: { [url('B')]: '^1.0.0' } });
+      resolveMock.mockRejectedValueOnce(new SVError('VERSION_CONFLICT'));
+      getResolutionMock.mockReturnValue(partial);
+      localMock.listVersions.mockResolvedValue(['1.9.0', '2.1.0']);
+      const sv = new SV('/project');
+
+      await expect(sv.put('B', '^2.0.0'))
+        .rejects.toMatchObject({ error: 'VERSION_CONFLICT' });
+      await sv.dangerousPut('B', '^2.0.0');
+
+      expect(resolveMock).toHaveBeenCalledTimes(1);
+      expect(sv.getResolution().B).toMatchObject({
+        version: '2.1.0',
+        dependencies: { A: '^1.0.0' },
+      });
+    });
+
   it('adds a module and keeps partial resolution on a conflict', async () => {
     const partial = {
       B: entry('B', { '2.1.0': {} }, '2.1.0'),
