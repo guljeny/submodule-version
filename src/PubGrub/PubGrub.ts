@@ -3,6 +3,10 @@ import { SVError } from '../errors';
 import { GithubError } from '../git';
 import { versionUtil } from '../versionUtil';
 import {
+  getResolutionPreference,
+  IResolutionPreference,
+} from './resolutionPreference';
+import {
   ICircularConflict,
   IEntrySource,
   IIncompatibility,
@@ -22,6 +26,11 @@ interface ISolverState {
   selected: Map<string, string>;
   requirements: Map<string, IRequirement[]>;
   edges: Map<string, string[]>;
+}
+
+interface IRootRequirement {
+  entry: IPackageEntry;
+  range: string;
 }
 
 type TSearchResult = {
@@ -92,6 +101,8 @@ export class PubGrub {
   /* Ошибки текущего прогона resolve: конфликты солвера и сбои загрузки. */
   private errors: TResolveError[] = [];
 
+  private resolutionPreference?: IResolutionPreference;
+
   constructor (
     private source: IEntrySource = entryStore,
     private isCandidateCompatible?: TIsCandidateCompatible,
@@ -99,8 +110,8 @@ export class PubGrub {
 
   /*
    * Resolve никогда не кидает исключений: конфликты солвера и ошибки
-   * данных/загрузки собираются в errors, а resolution остаётся
-   * наилучшим частичным результатом.
+   * данных/загрузки собираются в errors. После конфликта resolution
+   * достраивается до полного достижимого дерева по fallback-правилу.
    */
   public resolve = async (
     rootDependencies: TDependencies,
@@ -112,6 +123,7 @@ export class PubGrub {
     this.incompatibilityKeys = new Set();
     this.compatibleVersions = new Map();
     this.errors = [];
+    this.resolutionPreference = getResolutionPreference(rootDependencies);
 
     const state: ISolverState = {
       selected: new Map([[ROOT, ROOT_VERSION]]),
@@ -131,6 +143,8 @@ export class PubGrub {
       })),
     );
 
+    const rootRequirements: IRootRequirement[] = [];
+
     roots.forEach((outcome, index) => {
       if (outcome.status === 'rejected') {
         const depPath = depList[index][0];
@@ -141,6 +155,8 @@ export class PubGrub {
       }
 
       const { entry, range } = outcome.value;
+
+      rootRequirements.push({ entry, range });
 
       try {
         this.assertConstraint(entry.name, range, ROOT);
@@ -172,9 +188,9 @@ export class PubGrub {
 
     if (!result.ok) this.errors.push(this.toError(result.conflict));
 
-    this.resolution = result.ok
+    this.resolution = result.ok && !this.errors.length
       ? this.makeResolution(result.state)
-      : this.makeResolution(this.partialState, true);
+      : this.makeResolution(await this.completeFallback(rootRequirements));
 
     return { resolution: this.resolution, errors: this.errors };
   };
@@ -232,22 +248,9 @@ export class PubGrub {
 
   private makeResolution = (
     state: ISolverState | null,
-    includeRequested = false,
   ): TPubGrubResult => Object.fromEntries(
     [...this.entries].flatMap(([name, entry]) => {
-      let version = state?.selected.get(name) || '';
-
-      if (!version && includeRequested) {
-        const requirements = state?.requirements.get(name) || [];
-
-        if (!requirements.some(requirement => requirement.positive)) return [];
-
-        const requestedVersions = Object.keys(entry.versions).filter(
-          candidate => this.matchesRequirements(candidate, requirements),
-        );
-
-        version = versionUtil.latest(requestedVersions);
-      }
+      const version = state?.selected.get(name) || '';
 
       if (!version) return [];
 
@@ -259,6 +262,189 @@ export class PubGrub {
       }]];
     }),
   );
+
+  /*
+   * При несовместимом дереве PubGrub не может вернуть решение, но Version
+   * Manager всё равно должен получить каждый достижимый модуль. Строим
+   * детерминированный force-план: текущая операция имеет приоритет, затем
+   * первое требование (root-требования добавляются до обхода родителей).
+   * Остальные требования сохраняются для VERSION_CONFLICT, но не скрывают
+   * модуль из resolution.
+   */
+  private completeFallback = async (
+    roots: IRootRequirement[],
+  ): Promise<ISolverState> => {
+    const state: ISolverState = {
+      selected: new Map([[ROOT, ROOT_VERSION]]),
+      requirements: new Map(),
+      edges: new Map(),
+    };
+
+    const queue: string[] = [];
+    const queued = new Set<string>();
+    const processed = new Set<string>();
+
+    const enqueue = (name: string): void => {
+      if (queued.has(name) || processed.has(name)) return;
+
+      queued.add(name);
+      queue.push(name);
+    };
+
+    if (this.resolutionPreference) {
+      try {
+        const preferred = await this.load(this.resolutionPreference.depPath);
+
+        enqueue(preferred.name);
+      } catch (error) {
+        this.addResolveError(this.asResolveError(
+          error,
+          this.resolutionPreference.name,
+        ));
+      }
+    }
+
+    /* Все root constraints регистрируются до выбора первой версии. */
+    roots.forEach(({ entry, range }) => {
+      this.addRequirement(state, entry.name, this.requirement(
+        entry.name,
+        range,
+        ROOT,
+        [ROOT, entry.name],
+      ));
+      enqueue(entry.name);
+    });
+
+    while (queue.length) {
+      const name = queue.shift()!;
+
+      queued.delete(name);
+      if (processed.has(name)) continue;
+
+      const entry = this.entries.get(name);
+
+      if (!entry) continue;
+
+      const requirements = state.requirements.get(name) || [];
+      const version = this.fallbackVersion(entry, requirements);
+
+      if (!version) continue;
+
+      state.selected.set(name, version);
+      processed.add(name);
+
+      const dependencies = entry.versions[version] || {};
+      const dependencyNames: string[] = [];
+
+      for (const [depPath, range] of Object.entries(dependencies)) {
+        try {
+          this.assertConstraint(depPath, range, `${name}@${version}`);
+        } catch (error) {
+          this.addResolveError(this.asResolveError(error, depPath));
+
+          continue;
+        }
+
+        try {
+          const dependency = await this.load(depPath);
+
+          dependencyNames.push(dependency.name);
+
+          const parentRequirement = [...requirements]
+            .sort((a, b) => a.chain.length - b.chain.length)[0];
+
+          this.addRequirement(state, dependency.name, this.requirement(
+            dependency.name,
+            range,
+            `${name}@${version}`,
+            [...(parentRequirement?.chain || [ROOT, name]), dependency.name],
+          ));
+          enqueue(dependency.name);
+        } catch (error) {
+          this.addResolveError(this.asResolveError(error, depPath));
+        }
+      }
+
+      state.edges.set(name, dependencyNames);
+
+      for (const dependencyName of dependencyNames) {
+        const path = findPath(state.edges, dependencyName, name);
+
+        if (!path) continue;
+
+        this.addResolveError(this.toError({
+          type: 'circular',
+          name,
+          chain: [name, ...path],
+          packages: new Set([name, ...path]),
+        }));
+      }
+    }
+
+    this.addFallbackConflicts(state);
+
+    return state;
+  };
+
+  private fallbackVersion = (
+    entry: IPackageEntry,
+    requirements: IRequirement[],
+  ): string => {
+    const preferredRange = this.resolutionPreference?.name === entry.name
+      ? this.resolutionPreference.range
+      : undefined;
+
+    const firstRange = requirements.find(requirement => requirement.positive)
+      ?.range;
+
+    const versions = Object.keys(entry.versions);
+
+    return versionUtil.latest(
+      versions,
+      [preferredRange || firstRange || '*'],
+    ) || versionUtil.latest(versions);
+  };
+
+  private addFallbackConflicts = (state: ISolverState): void => {
+    for (const [name, version] of state.selected) {
+      if (name === ROOT) continue;
+
+      const entry = this.entries.get(name);
+      const requirements = state.requirements.get(name) || [];
+      const matches = this.matchesRequirements(version, requirements);
+
+      const accepted = !!entry
+        && this.compatibleVersionsOf(entry).includes(version);
+
+      if (matches && accepted) continue;
+
+      this.addResolveError(this.toError(
+        this.versionConflict(name, requirements, entry),
+      ));
+    }
+  };
+
+  private addResolveError = (error: TResolveError): void => {
+    const candidate = error as Error & {
+      error?: string;
+      details?: Record<string, unknown>;
+    };
+
+    const duplicate = this.errors.some(current => {
+      const existing = current as Error & {
+        error?: string;
+        details?: Record<string, unknown>;
+      };
+
+      return existing.error === candidate.error
+        && existing.message === candidate.message
+        && existing.details?.name === candidate.details?.name
+        && JSON.stringify(existing.details?.chain || null)
+          === JSON.stringify(candidate.details?.chain || null);
+    });
+
+    if (!duplicate) this.errors.push(error);
+  };
 
   private search = async (state: ISolverState): Promise<TSearchResult> => {
     this.rememberState(state);

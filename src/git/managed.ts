@@ -29,6 +29,10 @@ export const managedGit = {
     local.getRemote(moduleDir(module))
   ),
 
+  currentVersion: async (module: string): Promise<string | null> => (
+    local.currentVersion(module)
+  ),
+
   isRemoteAhead: async (module?: string): Promise<boolean> => {
     const dir = moduleDir(module);
 

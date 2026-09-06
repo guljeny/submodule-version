@@ -14,6 +14,7 @@ import { npm } from '../npm';
 import { pkgJSONManager } from '../pkgJSONManager';
 import { RunOptions } from '../runOptions';
 import { versionUtil } from '../versionUtil';
+import { setResolutionPreference } from '../PubGrub/resolutionPreference';
 import { syncModules, syncModulesDir } from './modules';
 import { ensureWorkspaces, syncPkgJson } from './packageJson';
 import { IResolveContext } from './types';
@@ -143,11 +144,30 @@ export const resolve = async (
   const { resolution, errors } = await store.simulate(
     override ? [override] : [],
     (baseJson.sv || {}) as TDependencies,
-    deps => new PubGrub(store, context.isCandidateCompatible).resolve(deps),
+    deps => {
+      if (override?.add) {
+        const name = git.parseUrl(override.add).name;
+
+        if (name) {
+          setResolutionPreference(deps, {
+            depPath: override.add,
+            name,
+            range: override.version || '*',
+          });
+        }
+      }
+
+      return new PubGrub(store, context.isCandidateCompatible).resolve(deps);
+    },
   );
 
+  /* check-only возвращает рассчитанное дерево и все ошибки до любых
+   * записей package.json, Git-переходов и npm install. onError здесь не
+   * вызывается: разрешать мутацию в режиме без мутации бессмысленно. */
+  if (context.checkOnly) return { resolution, errors };
+
   /* SV не хранит resolution: при отказе onError рабочая копия не тронута,
-   * частичный результат просто возвращается вызывающему. */
+   * полный fallback-результат просто возвращается вызывающему. */
   if (errors.length && !await confirmErrors(errors, context.onError)) {
     return { resolution, errors };
   }

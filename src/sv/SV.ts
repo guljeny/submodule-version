@@ -43,7 +43,7 @@ export class SV {
   public readonly git = managedGit;
 
   public resolve = async (
-    url?: string,
+    urlOrCheckOnly?: string | true,
     versionOrParent?: string | null,
     parentName?: string,
   ): Promise<TResolveResult> => resolve(
@@ -51,8 +51,9 @@ export class SV {
       explicitModulesDir: this.explicitModulesDir,
       isCandidateCompatible: this.isCandidateCompatible,
       onError: this.onError,
+      checkOnly: urlOrCheckOnly === true,
     },
-    url,
+    typeof urlOrCheckOnly === 'string' ? urlOrCheckOnly : undefined,
     versionOrParent,
     parentName,
   );

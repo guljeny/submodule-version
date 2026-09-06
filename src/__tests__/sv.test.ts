@@ -5,6 +5,7 @@ import { npm } from '../npm';
 import { pkgJSONManager } from '../pkgJSONManager';
 import { readFile } from 'fs/promises';
 import { SVError } from '../errors';
+import { getResolutionPreference } from '../PubGrub/resolutionPreference';
 
 jest.mock('../PubGrub', () => ({
   PubGrub: jest.fn(),
@@ -82,6 +83,9 @@ jest.mock('../git/managed', () => {
       ),
       getRemote: async (module?: string) => (
         mockedGit.local.getRemote(moduleDir(module))
+      ),
+      currentVersion: async (module: string) => (
+        mockedGit.local.currentVersion(module)
       ),
       isRemoteAhead: async (module?: string) => {
         const dir = moduleDir(module);
@@ -336,6 +340,55 @@ describe('SV.resolve validation', () => {
 
     expect(npmInstallMock).not.toHaveBeenCalled();
   });
+
+  it('checks the tree without applying any project changes', async () => {
+    const resolution = {
+      A: entry('A', { '1.0.0': {} }, '1.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockResolvedValue(resolved(resolution));
+    const sv = new SV('/project');
+
+    await expect(sv.resolve(true)).resolves.toEqual({
+      resolution,
+      errors: [],
+    });
+
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(localMock.addSubmodule).not.toHaveBeenCalled();
+    expect(localMock.checkout).not.toHaveBeenCalled();
+    expect(localMock.rm).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
+
+  it('does not ask to apply resolution errors in check-only mode', async () => {
+    const error = new SVError('VERSION_CONFLICT');
+    const onError = jest.fn(async () => true);
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockResolvedValue(resolved({}, [error]));
+    const sv = new SV('/project', undefined, { onError });
+
+    await expect(sv.resolve(true)).resolves.toEqual({
+      resolution: {},
+      errors: [error],
+    });
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('SV.git', () => {
+  it('returns the installed module version', async () => {
+    localMock.currentVersion.mockResolvedValue('1.2.3');
+    const sv = new SV('/project', 'addons');
+
+    await expect(sv.git.currentVersion('A')).resolves.toBe('1.2.3');
+
+    expect(localMock.currentVersion).toHaveBeenCalledWith('A');
+  });
 });
 
 describe('SV.resolve put', () => {
@@ -361,6 +414,26 @@ describe('SV.resolve put', () => {
     expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
     expect(localMock.checkout).toHaveBeenCalledWith('B', '1.2.0');
     expect(npmInstallMock).toHaveBeenCalled();
+  });
+
+  it('marks the current put as the preferred conflict fallback', async () => {
+    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
+    resolveMock.mockImplementation(async dependencies => {
+      expect(getResolutionPreference(dependencies)).toEqual({
+        depPath: url('B'),
+        name: 'B',
+        range: '^2.0.0',
+      });
+
+      return resolved({
+        A: entry('A', { '1.0.0': {} }, '1.0.0'),
+        B: entry('B', { '2.0.0': {} }, '2.0.0'),
+      });
+    });
+
+    const sv = new SV('/project');
+
+    await sv.resolve(url('B'), '^2.0.0');
   });
 
   it('resolves through * and writes ^ with the highest selected version',

@@ -1,4 +1,5 @@
 import { PubGrub } from '../PubGrub';
+import { setResolutionPreference } from '../resolutionPreference';
 import type {
   IEntrySource,
   IPackageEntry,
@@ -436,7 +437,7 @@ describe('PubGrub errors', () => {
     expect(resolver.getResolution()).toBe(resolution);
   });
 
-  it('does not substitute an available version when the request cannot match',
+  it('keeps the module visible when the requested version cannot match',
     async () => {
       const fixture = source(ALL_MODULES);
       const resolver = new PubGrub(fixture.store);
@@ -447,7 +448,86 @@ describe('PubGrub errors', () => {
 
       expect(errors[0]).toMatchObject({ error: 'VERSION_CONFLICT' });
 
-      expect(resolution).toEqual({});
+      expect(selected(resolution)).toEqual({ ExactA: '1.0.0' });
+      expect(resolution.ExactA.requestedVersion).toEqual({
+        '<root>': '9.0.0',
+      });
+    });
+
+  it('completes the reachable tree after an early root conflict', async () => {
+    const fixture = source(ALL_MODULES);
+    const resolver = new PubGrub(fixture.store);
+
+    const { resolution, errors } = await resolver.resolve({
+      [ExactA.url]: '9.0.0',
+      [A.url]: '*',
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      error: 'VERSION_CONFLICT',
+      details: { name: 'ExactA' },
+    });
+    expect(selected(resolution)).toEqual({
+      ExactA: '1.0.0',
+      A: '1.2.0',
+      B: '1.2.0',
+      C: '1.4.2',
+      E: '0.0.3',
+    });
+  });
+
+  it('reports independent conflicts found while completing the tree',
+    async () => {
+      const fixture = source(ALL_MODULES);
+      const resolver = new PubGrub(fixture.store);
+
+      const { resolution, errors } = await resolver.resolve({
+        [ExactA.url]: '9.0.0',
+        [ConflictA.url]: '^1.0.0',
+        [ConflictB.url]: '*',
+      });
+
+      expect(selected(resolution)).toEqual({
+        ExactA: '1.0.0',
+        ConflictA: '1.0.0',
+        ConflictB: '1.0.0',
+      });
+      expect(errors).toHaveLength(2);
+      expect(errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          error: 'VERSION_CONFLICT',
+          details: expect.objectContaining({ name: 'ExactA' }),
+        }),
+        expect.objectContaining({
+          error: 'VERSION_CONFLICT',
+          details: expect.objectContaining({ name: 'ConflictA' }),
+        }),
+      ]));
+    });
+
+  it('prefers the version requested by the current forced operation',
+    async () => {
+      const fixture = source(ALL_MODULES);
+      const resolver = new PubGrub(fixture.store);
+
+      const dependencies = {
+        [ExactA.url]: '9.0.0',
+        [CandidateA.url]: '^1.0.0',
+      };
+
+      setResolutionPreference(dependencies, {
+        depPath: CandidateA.url,
+        name: CandidateA.name,
+        range: '^2.0.0',
+      });
+
+      const { resolution } = await resolver.resolve(dependencies);
+
+      expect(selected(resolution)).toEqual({
+        CandidateA: '2.0.0',
+        ExactA: '1.0.0',
+      });
     });
 
   it('reports every requirement in a version conflict', async () => {
@@ -479,6 +559,27 @@ describe('PubGrub errors', () => {
       details: { name: 'ExactA', versions: ['1.0.0'] },
     });
   });
+
+  it('keeps a root module visible when its constraint is invalid',
+    async () => {
+      const fixture = source(ALL_MODULES);
+      const resolver = new PubGrub(fixture.store);
+
+      const { resolution, errors } = await resolver.resolve({
+        [RangeA.url]: 'invalid',
+      });
+
+      expect(errors).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          error: 'UNKNOWN_VERSION',
+          details: { name: 'RangeA', parent: '<root>', version: 'invalid' },
+        }),
+      ]));
+      expect(selected(resolution)).toEqual({ RangeA: '2.0.0' });
+      expect(resolution.RangeA.requestedVersion).toEqual({
+        '<root>': 'invalid',
+      });
+    });
 
   it('reports a module without version tags', async () => {
     const currentRoot = root.add(Empty);

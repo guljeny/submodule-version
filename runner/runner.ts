@@ -159,7 +159,7 @@ const publish = makeEvent(async (sv, arg) => {
 });
 
 const validate = makeEvent(async (sv, arg) => {
-  const { errors } = await sv.resolve();
+  const { errors } = await sv.resolve(arg.checkOnly ? true : undefined);
 
   reportErrors(errors, !!arg.force);
 
@@ -183,7 +183,11 @@ export const s = yargs.scriptName('sv')
   .command(
     ['$0'],
     'Validate and install modules',
-    () => {},
+    y => y.option('check-only', {
+      type: 'boolean',
+      default: false,
+      describe: 'Resolve and report errors without changing the project',
+    }),
     validate,
   )
   .command(

@@ -73,6 +73,7 @@ Or use the [`publish`](#sv-publish) API, which bumps the version, commits, tags 
 ## Commands
 
 - `npx sv` - Resolve, validate and install/sync all modules (default command)
+- `npx sv --check-only` - Resolve the current dependency tree and report errors without changing package.json, submodules or node_modules
 - `npx sv put <url> [target] [--ver 1.2.0] [--force]` - Install a submodule or change its version (`install`, `i`). Without `target` the module is installed in the project root; `target` is a parent module name. Without `--ver` the highest possible version is selected (as if `'*'` was passed). `--force` applies the Git/package.json/npm mutation even when PubGrub reports resolution errors
 - `npx sv delete <path> [--force]` - Delete a submodule from its parent (project root when the path is a plain name) by path (`remove`, `r`). `--force` applies the mutation despite resolution errors
 - `npx sv list-versions [name] [--installed]` - List available versions of one module, or of every resolved module when `name` is omitted (`ls`). With `--installed` shows the resolved (checked out) versions
@@ -121,6 +122,9 @@ const { resolution, errors } = await sv.resolve(
 `sv.resolve(url?, versionOrParent?, parentName?)` is the single entry point for everything: validation, install, version switch and delete. It returns `{ resolution, errors }` or throw error (`NOT_A_NPM`, `NOT_A_GIT_REPO`, git/npm failures)
 
 - Without arguments it validates and syncs the current tree
+- `sv.resolve(true)` resolves the current tree in check-only mode: it returns
+  `{ resolution, errors }` without writing manifests, changing Git submodules,
+  running `npm install`, or invoking `onError`
 - instead of `url` you can pass the name of an already installed module
 - without `version` the highest possible version is selected).
 - With `parentName` the range is written to another submodule.
