@@ -357,7 +357,8 @@ describe('PubGrub resolution', () => {
     });
   });
 
-  it('reports a conflict when the host rejects every candidate', async () => {
+  it('keeps the requested tag when the host rejects every candidate',
+    async () => {
     const fixture = source(ALL_MODULES);
     const resolver = new PubGrub(fixture.store, () => false);
 
@@ -368,16 +369,51 @@ describe('PubGrub resolution', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({
       error: 'VERSION_CONFLICT',
-      details: { name: 'CandidateA', versions: [] },
+      details: {
+        name: 'CandidateA',
+        versions: ['2.0.0', '1.0.0'],
+        rejectedCandidates: [
+          expect.objectContaining({ name: 'CandidateA', version: '2.0.0' }),
+          expect.objectContaining({ name: 'CandidateA', version: '1.0.0' }),
+        ],
+      },
     });
 
-    expect(resolution).toEqual({});
-    expect(resolver.getResolution()).toEqual({});
+    expect(selected(resolution)).toEqual({ CandidateA: '2.0.0' });
+    expect(resolver.getResolution()).toBe(resolution);
+  });
+
+  it('keeps a host-rejected matching tag visible in the conflict', async () => {
+    const fixture = source(ALL_MODULES);
+
+    const resolver = new PubGrub(
+      fixture.store,
+      candidate => (candidate.packageJson as any)?.compatible !== false,
+    );
+
+    const { resolution, errors } = await resolver.resolve({
+      [CandidateA.url]: '^2.0.0',
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      error: 'VERSION_CONFLICT',
+      details: {
+        name: 'CandidateA',
+        versions: ['2.0.0', '1.0.0'],
+        rejectedCandidates: [expect.objectContaining({
+          name: 'CandidateA',
+          version: '2.0.0',
+          packageJson: { compatible: false },
+        })],
+      },
+    });
+    expect(selected(resolution)).toEqual({ CandidateA: '2.0.0' });
   });
 });
 
 describe('PubGrub errors', () => {
-  it('keeps a best-effort resolution after a version conflict', async () => {
+  it('keeps only selected versions after a version conflict', async () => {
     const fixture = source(ALL_MODULES);
     const resolver = new PubGrub(fixture.store);
 
@@ -400,7 +436,7 @@ describe('PubGrub errors', () => {
     expect(resolver.getResolution()).toBe(resolution);
   });
 
-  it('keeps an available version when the requested one does not exist',
+  it('does not substitute an available version when the request cannot match',
     async () => {
       const fixture = source(ALL_MODULES);
       const resolver = new PubGrub(fixture.store);
@@ -411,9 +447,7 @@ describe('PubGrub errors', () => {
 
       expect(errors[0]).toMatchObject({ error: 'VERSION_CONFLICT' });
 
-      expect(selected(resolution)).toEqual({
-        ExactA: '1.0.0',
-      });
+      expect(resolution).toEqual({});
     });
 
   it('reports every requirement in a version conflict', async () => {

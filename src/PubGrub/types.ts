@@ -85,7 +85,10 @@ export interface IVersionConflict {
   type: 'version';
   name: string;
   requirements: IRequirement[];
+  /* Все semver-теги пакета, включая отклонённые хостом кандидаты. */
   versions: string[];
+  /* Есть только когда подходящие по semver кандидаты отклонены callback'ом. */
+  rejectedCandidates?: ICandidate[];
   packages: Set<string>;
 }
 

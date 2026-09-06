@@ -232,22 +232,21 @@ export class PubGrub {
 
   private makeResolution = (
     state: ISolverState | null,
-    includeUnselected = false,
+    includeRequested = false,
   ): TPubGrubResult => Object.fromEntries(
     [...this.entries].flatMap(([name, entry]) => {
       let version = state?.selected.get(name) || '';
 
-      if (!version && includeUnselected) {
-        if (!state?.requirements.has(name)) return [];
+      if (!version && includeRequested) {
+        const requirements = state?.requirements.get(name) || [];
 
-        const ranges = (state?.requirements.get(name) || [])
-          .filter(requirement => requirement.positive)
-          .map(requirement => requirement.range);
+        if (!requirements.some(requirement => requirement.positive)) return [];
 
-        const versions = this.versionsOf(entry);
+        const requestedVersions = Object.keys(entry.versions).filter(
+          candidate => this.matchesRequirements(candidate, requirements),
+        );
 
-        version = versionUtil.latest(versions, ranges)
-          || versionUtil.latest(versions);
+        version = versionUtil.latest(requestedVersions);
       }
 
       if (!version) return [];
@@ -302,7 +301,7 @@ export class PubGrub {
       const conflict = this.versionConflict(
         choice.name,
         choice.requirements,
-        this.versionsOf(choice.entry),
+        choice.entry,
       );
 
       this.learn(state, conflict);
@@ -344,7 +343,7 @@ export class PubGrub {
       conflict: lastConflict || this.versionConflict(
         choice.name,
         choice.requirements,
-        this.versionsOf(choice.entry),
+        choice.entry,
       ),
     };
   };
@@ -433,19 +432,25 @@ export class PubGrub {
 
   private candidates = (name: string, state: ISolverState): string[] => {
     const entry = this.entries.get(name);
-    const versions = entry ? this.versionsOf(entry) : [];
+    const versions = entry ? this.compatibleVersionsOf(entry) : [];
     const requirements = state.requirements.get(name) || [];
 
     return versionUtil.sort(versions).filter(version => (
-      requirements.every(requirement => {
-        const matches = versionUtil.satisfies(version, requirement.range);
-
-        return requirement.positive ? matches : !matches;
-      })
+      this.matchesRequirements(version, requirements)
     ));
   };
 
-  private versionsOf = (entry: IPackageEntry): string[] => {
+  // eslint-disable-next-line class-methods-use-this
+  private matchesRequirements = (
+    version: string,
+    requirements: IRequirement[],
+  ): boolean => requirements.every(requirement => {
+    const matches = versionUtil.satisfies(version, requirement.range);
+
+    return requirement.positive ? matches : !matches;
+  });
+
+  private compatibleVersionsOf = (entry: IPackageEntry): string[] => {
     const cached = this.compatibleVersions.get(entry.name);
 
     if (cached) return cached;
@@ -599,7 +604,7 @@ export class PubGrub {
     return this.versionConflict(
       name,
       state.requirements.get(name) || [],
-      this.entries.has(name) ? this.versionsOf(this.entries.get(name)!) : [],
+      this.entries.get(name),
     );
   };
 
@@ -673,31 +678,58 @@ export class PubGrub {
 
       if (valid) continue;
 
-      return this.versionConflict(
-        name,
-        requirements,
-        this.entries.has(name) ? this.versionsOf(this.entries.get(name)!) : [],
-      );
+      const entry = this.entries.get(name);
+
+      return this.versionConflict(name, requirements, entry);
     }
 
     return null;
   };
 
-  // eslint-disable-next-line class-methods-use-this
   private versionConflict = (
     name: string,
     requirements: IRequirement[],
-    versions: string[],
-  ): IVersionConflict => ({
-    type: 'version',
-    name,
-    requirements,
-    versions: versionUtil.sort(versions),
-    packages: new Set([
+    entry?: IPackageEntry,
+  ): IVersionConflict => {
+    const versions = versionUtil.sort(Object.keys(entry?.versions || {}));
+
+    const compatibleVersions = new Set(
+      entry ? this.compatibleVersionsOf(entry) : [],
+    );
+
+    const matchingVersions = versions.filter(version => (
+      this.matchesRequirements(version, requirements)
+    ));
+
+    const compatibleMatching = matchingVersions.filter(version => (
+      compatibleVersions.has(version)
+    ));
+
+    const rejectedCandidates = (
+      !this.isCandidateCompatible || compatibleMatching.length
+    )
+      ? []
+      : matchingVersions
+        .filter(version => !compatibleVersions.has(version))
+        .map(version => ({
+          name,
+          url: entry?.url || '',
+          version,
+          packageJson: entry?.manifests?.[version] ?? null,
+        }));
+
+    return {
+      type: 'version',
       name,
-      ...requirements.flatMap(requirement => requirement.chain),
-    ].filter(packageName => packageName !== ROOT)),
-  });
+      requirements,
+      versions,
+      ...(rejectedCandidates.length ? { rejectedCandidates } : {}),
+      packages: new Set([
+        name,
+        ...requirements.flatMap(requirement => requirement.chain),
+      ].filter(packageName => packageName !== ROOT)),
+    };
+  };
 
   // eslint-disable-next-line class-methods-use-this
   private assertConstraint = (
@@ -738,6 +770,9 @@ export class PubGrub {
       parents,
       constraints: conflict.requirements,
       versions: conflict.versions,
+      ...(conflict.rejectedCandidates
+        ? { rejectedCandidates: conflict.rejectedCandidates }
+        : {}),
       chain,
     });
   };

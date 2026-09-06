@@ -49,6 +49,29 @@ describe('printError', () => {
     ].join('\n'));
   });
 
+  it('reports a host-rejected matching version as a version conflict', () => {
+    const error = new SVError('VERSION_CONFLICT', {
+      name: 'Package Name',
+      parents: { '<root>': '^0.1.5' },
+      constraints: [{ range: '^0.1.5', positive: true, requiredBy: '<root>' }],
+      versions: ['0.1.5', '0.1.4', '0.1.3'],
+      rejectedCandidates: [{
+        name: 'Package Name',
+        url: 'git@git:repo/Package-Name.git',
+        version: '0.1.5',
+        packageJson: { ewaApi: 1 },
+      }],
+      chain: ['<root>', 'Package Name'],
+    });
+
+    expect(printError(error)).toBe([
+      'Version conflict for Package Name:',
+      '  - ^0.1.5 required by the project root',
+      '  chain: the project root -> Package Name',
+      '  available versions: 0.1.5, 0.1.4, 0.1.3',
+    ].join('\n'));
+  });
+
   it('shows the project name from package.json instead of <root>', () => {
     readFileSyncMock.mockReturnValue(JSON.stringify({ name: 'ewa' }));
 
