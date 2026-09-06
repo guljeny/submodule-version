@@ -22,6 +22,42 @@ describe('versionUtil: SemVer primitives', () => {
     expect(versionUtil.satisfies('0.0.4', '^0.0.3')).toBe(false);
   });
 
+  it('normalizes VersionPicker ranges', () => {
+    expect(versionUtil.normalizeConstraint('1.2.4-*')).toBe('>=1.2.4');
+    expect(versionUtil.normalizeConstraint('1.2.4-1.5.0'))
+      .toBe('>=1.2.4 <1.5.0');
+    expect(versionUtil.validate('1.2.4-*', true)).toBe(true);
+    expect(versionUtil.validate('1.2.4-1.5.0', true)).toBe(true);
+    expect(versionUtil.validate('1.2.4-1.2.4', true)).toBe(true);
+    expect(versionUtil.validate('1.5.0-1.2.4', true)).toBe(false);
+  });
+
+  it('resolves VersionPicker major and bounded ranges', () => {
+    expect(versionUtil.satisfies('8.0.0', '1.2.4-*')).toBe(true);
+    expect(versionUtil.satisfies('1.2.4', '1.2.4-1.2.4')).toBe(false);
+    expect(versionUtil.satisfies('1.5.0', '1.2.4-1.5.0')).toBe(false);
+    expect(versionUtil.satisfies('1.5.1', '1.2.4-1.5.0')).toBe(false);
+  });
+
+  it.each([
+    ['1.2.5', true],
+    ['1.2.8', true],
+    ['1.3.0', true],
+    ['1.5.5', true],
+    ['2.0.0', false],
+  ])('matches %s against ^1.2.5: %s', (version, expected) => {
+    expect(versionUtil.satisfies(version, '^1.2.5')).toBe(expected);
+  });
+
+  it.each([
+    ['1.2.3', true],
+    ['1.2.6', true],
+    ['1.3.0', false],
+    ['2.0.0', false],
+  ])('matches %s against ~1.2.3: %s', (version, expected) => {
+    expect(versionUtil.satisfies(version, '~1.2.3')).toBe(expected);
+  });
+
   it('selects the highest version satisfying every constraint', () => {
     const versions = ['2.0.0', '1.4.2', '1.3.2', 'broken'];
 

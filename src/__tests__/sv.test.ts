@@ -57,6 +57,53 @@ jest.mock('../pkgJSONManager', () => ({
   },
 }));
 
+/* Фасад managedGit делегирует в git.local — в тесте воспроизводим его
+ * над замоканным local, сохраняя резолв module → modulesDir/<module>. */
+jest.mock('../git/managed', () => {
+  const path = jest.requireActual('path');
+  const { RunOptions } = jest.requireActual('../runOptions');
+  const { git: mockedGit } = jest.requireMock('../git');
+
+  const moduleDir = (module?: string): string => (
+    module ? path.join(RunOptions.modulesDir, module) : RunOptions.cwd
+  );
+
+  return {
+    managedGit: {
+      hasChanges: async (module?: string) => {
+        const dir = moduleDir(module);
+
+        if (await mockedGit.local.hasChanges(dir)) return true;
+
+        return mockedGit.local.hasUnpushedCommits(dir);
+      },
+      hasUncommittedChanges: async (module?: string) => (
+        mockedGit.local.hasChanges(moduleDir(module))
+      ),
+      getRemote: async (module?: string) => (
+        mockedGit.local.getRemote(moduleDir(module))
+      ),
+      isRemoteAhead: async (module?: string) => {
+        const dir = moduleDir(module);
+
+        if (!await mockedGit.local.isGitRepo(dir)) return false;
+
+        return mockedGit.local.isRemoteAhead(dir);
+      },
+      pullRebaseAutostash: async (module?: string) => (
+        mockedGit.local.pullRebaseAutostash(moduleDir(module))
+      ),
+      isPublished: async (module?: string) => {
+        const dir = moduleDir(module);
+
+        if (!await mockedGit.local.isGitRepo(dir)) return false;
+
+        return !!(await mockedGit.local.getRemote(dir));
+      },
+    },
+  };
+});
+
 jest.mock('../npm', () => ({
   npm: {
     install: jest.fn(async () => undefined),
@@ -65,7 +112,6 @@ jest.mock('../npm', () => ({
 
 const PubGrubMock = PubGrub as unknown as jest.Mock;
 const resolveMock = jest.fn();
-const getResolutionMock = jest.fn();
 const readMock = pkgJSONManager.read as jest.Mock;
 const writeMock = pkgJSONManager.write as jest.Mock;
 const readFileMock = readFile as jest.Mock;
@@ -85,15 +131,18 @@ const entry = (
   dependencies: versions[version] || {},
 });
 
+const resolved = (
+  resolution: Record<string, unknown>,
+  errors: SVError[] = [],
+) => ({ resolution, errors });
+
 beforeEach(() => {
   jest.clearAllMocks();
   jest.spyOn(console, 'log').mockImplementation(() => {});
   PubGrubMock.mockImplementation(() => ({
     resolve: resolveMock,
-    getResolution: getResolutionMock,
   }));
-  resolveMock.mockResolvedValue({});
-  getResolutionMock.mockReturnValue({});
+  resolveMock.mockResolvedValue(resolved({}));
   readFileMock.mockRejectedValue(new Error('ENOENT'));
   localMock.isGitRepo.mockResolvedValue(true);
   localMock.currentVersion.mockResolvedValue(null);
@@ -109,23 +158,12 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-describe('SV.init', () => {
-  it('refreshes cached package metadata on every init', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    const sv = new SV('/project');
-    const clear = jest.spyOn((sv as any).store, 'clear');
-
-    await sv.init();
-    await sv.init();
-
-    expect(clear).toHaveBeenCalledTimes(2);
-  });
-
+describe('SV.resolve validation', () => {
   it('fails before resolving when package.json is missing', async () => {
     readMock.mockResolvedValue(null);
     const sv = new SV('/project');
 
-    await expect(sv.init()).rejects.toMatchObject({ error: 'NOT_A_NPM' });
+    await expect(sv.resolve()).rejects.toMatchObject({ error: 'NOT_A_NPM' });
     expect(resolveMock).not.toHaveBeenCalled();
   });
 
@@ -134,13 +172,13 @@ describe('SV.init', () => {
     localMock.isGitRepo.mockResolvedValue(false);
     const sv = new SV('/project');
 
-    await expect(sv.init()).rejects.toMatchObject({
+    await expect(sv.resolve()).rejects.toMatchObject({
       error: 'NOT_A_GIT_REPO',
     });
     expect(resolveMock).not.toHaveBeenCalled();
   });
 
-  it('passes rootDeps to PubGrub and stores its result', async () => {
+  it('passes rootDeps to PubGrub and returns its result', async () => {
     const rootDeps = { 'git@git:repo/A.git': '^1.0.0' };
 
     const result = {
@@ -148,15 +186,16 @@ describe('SV.init', () => {
     };
 
     readMock.mockResolvedValue({ sv: rootDeps });
-    resolveMock.mockResolvedValue(result);
+    resolveMock.mockResolvedValue(resolved(result));
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await expect(sv.resolve()).resolves.toEqual({
+      resolution: result,
+      errors: [],
+    });
 
     expect(resolveMock).toHaveBeenCalledWith(rootDeps);
-    expect(sv.getResolution()).toBe(result);
-    expect(sv.listVersions()).toEqual({ A: ['1.2.0'] });
   });
 
   it('passes the candidate compatibility callback to PubGrub', async () => {
@@ -166,7 +205,7 @@ describe('SV.init', () => {
 
     const sv = new SV('/project', undefined, { isCandidateCompatible });
 
-    await sv.init();
+    await sv.resolve();
 
     expect(PubGrubMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -174,77 +213,22 @@ describe('SV.init', () => {
     );
   });
 
-  it('guards result before init', () => {
-    expect(() => new SV('/project').getResolution()).toThrow(
-      expect.objectContaining({ error: 'NOT_INITIALIZED' }),
-    );
-  });
-
-  it('is initialized with an empty resolution when resolve fails', async () => {
-    readMock.mockResolvedValue({ sv: { [url('A')]: '^2.0.0' } });
-    resolveMock.mockRejectedValue(new Error('version conflict'));
+  it('creates a fresh PubGrub on every resolve', async () => {
+    readMock.mockResolvedValue({ sv: {} });
     const sv = new SV('/project');
 
-    await expect(sv.init()).rejects.toThrow('version conflict');
+    await sv.resolve();
+    await sv.resolve();
 
-    expect(sv.getResolution()).toEqual({});
-  });
-
-  it('keeps PubGrub partial resolution on a version conflict', async () => {
-    const partial = {
-      A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    };
-
-    readMock.mockResolvedValue({ sv: { [url('A')]: '^2.0.0' } });
-    resolveMock.mockRejectedValue(new Error('version conflict'));
-    getResolutionMock.mockReturnValue(partial);
-    const sv = new SV('/project');
-
-    await expect(sv.init()).rejects.toThrow('version conflict');
-
-    expect(sv.getResolution()).toBe(partial);
-  });
-
-  it('keeps the resolution when git synchronization fails', async () => {
-    const result = {
-      A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    };
-
-    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-    resolveMock.mockResolvedValue(result);
-    localMock.isGitRepo.mockImplementation(
-      async (dir: string) => dir === '/project',
-    );
-    localMock.addSubmodule.mockRejectedValueOnce(new Error('git failed'));
-    const sv = new SV('/project');
-
-    await expect(sv.init()).rejects.toThrow('git failed');
-
-    expect(sv.getResolution()).toBe(result);
-  });
-
-  it('keeps the resolution when npm install fails', async () => {
-    const result = {
-      A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    };
-
-    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-    resolveMock.mockResolvedValue(result);
-    npmInstallMock.mockRejectedValueOnce(new Error('npm failed'));
-    const sv = new SV('/project');
-
-    await expect(sv.init()).rejects.toThrow('npm failed');
-
-    expect(sv.getResolution()).toBe(result);
+    expect(PubGrubMock).toHaveBeenCalledTimes(2);
   });
 
   it('adds the modules dir to package.json workspaces', async () => {
     readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(writeMock).toHaveBeenCalledWith({
       sv: {},
@@ -255,11 +239,10 @@ describe('SV.init', () => {
 
   it('keeps workspaces and respects a custom modules dir', async () => {
     readMock.mockResolvedValue({ sv: {}, workspaces: ['packages/*'] });
-    resolveMock.mockResolvedValue({});
 
     const sv = new SV('/project', 'libs');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(writeMock).toHaveBeenCalledWith({
       sv: {},
@@ -274,11 +257,10 @@ describe('SV.init', () => {
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
-    resolveMock.mockResolvedValue({});
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(writeMock).not.toHaveBeenCalled();
   });
@@ -289,13 +271,13 @@ describe('SV.init', () => {
       workspaces: ['libs/*'],
       'sv-dir': 'libs',
     });
-    resolveMock.mockResolvedValue({
+    resolveMock.mockResolvedValue(resolved({
       A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    });
+    }));
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(writeMock).not.toHaveBeenCalled();
     expect(localMock.isGitRepo).toHaveBeenCalledWith('libs/A');
@@ -309,11 +291,10 @@ describe('SV.init', () => {
       '\tpath = addons/B',
     ].join('\n'));
     readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(writeMock).toHaveBeenCalledWith({
       sv: {},
@@ -331,13 +312,13 @@ describe('SV.init', () => {
     localMock.isGitRepo.mockImplementation(
       async (dir: string) => dir === '/project',
     );
-    resolveMock.mockResolvedValue({
+    resolveMock.mockResolvedValue(resolved({
       A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    });
+    }));
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(npmInstallMock).toHaveBeenCalled();
   });
@@ -348,27 +329,28 @@ describe('SV.init', () => {
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
-    resolveMock.mockResolvedValue({});
 
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve();
 
     expect(npmInstallMock).not.toHaveBeenCalled();
   });
 });
 
-describe('SV.put', () => {
+describe('SV.resolve put', () => {
   it('installs a root module and writes the range', async () => {
     readMock.mockResolvedValue({ sv: {} });
-    localMock.isGitRepo.mockResolvedValue(false);
-    resolveMock.mockResolvedValue({
+    localMock.isGitRepo.mockImplementation(
+      async (dir: string) => dir === '/project',
+    );
+    resolveMock.mockResolvedValue(resolved({
       B: entry('B', { '1.2.0': {} }, '1.2.0'),
-    });
+    }));
 
     const sv = new SV('/project');
 
-    await sv.put(url('B'), '^1.2.0');
+    await sv.resolve(url('B'), '^1.2.0');
 
     expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^1.2.0' });
     expect(writeMock).toHaveBeenCalledWith({
@@ -381,13 +363,38 @@ describe('SV.put', () => {
     expect(npmInstallMock).toHaveBeenCalled();
   });
 
-  it('falls back to * when version is omitted', async () => {
+  it('resolves through * and writes ^ with the highest selected version',
+    async () => {
     readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
+    resolveMock.mockResolvedValue(resolved({
+      B: entry('B', {
+        '1.2.0': {},
+        '1.5.5': {},
+        '2.0.0': {},
+      }, '2.0.0'),
+    }));
 
     const sv = new SV('/project');
 
-    await sv.put(url('B'));
+    await sv.resolve(url('B'));
+
+    expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '*' });
+    expect(writeMock).toHaveBeenCalledWith({
+      sv: { [url('B')]: '^2.0.0' },
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+  });
+
+  it('preserves an explicitly passed * range', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue(resolved({
+      B: entry('B', { '2.0.0': {} }, '2.0.0'),
+    }));
+
+    const sv = new SV('/project');
+
+    await sv.resolve(url('B'), '*');
 
     expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '*' });
     expect(writeMock).toHaveBeenCalledWith({
@@ -403,20 +410,27 @@ describe('SV.put', () => {
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
-    resolveMock.mockResolvedValue({
-      A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    });
+    resolveMock
+      .mockResolvedValueOnce(resolved({
+        A: entry('A', { '1.0.0': {} }, '1.0.0'),
+      }))
+      .mockResolvedValueOnce(resolved({
+        A: entry('A', {
+          '1.0.0': { B: '*' },
+        }, '1.0.0'),
+        B: entry('B', { '1.4.2': {} }, '1.4.2'),
+      }));
 
     const sv = new SV('/project');
 
-    await sv.init();
-    await sv.put(url('B'), 'A');
+    await sv.resolve();
+    await sv.resolve(url('B'), 'A');
 
     /* rootDeps не меняются, диапазон пишется в package.json родителя */
     expect(resolveMock).toHaveBeenLastCalledWith({ [url('A')]: '*' });
     expect(writeMock).toHaveBeenCalledWith(
       {
-        sv: { [url('A')]: '*', [url('B')]: '*' },
+        sv: { [url('A')]: '*', [url('B')]: '^1.4.2' },
         workspaces: ['modules/*'],
         'sv-dir': 'modules',
       },
@@ -430,16 +444,16 @@ describe('SV.put', () => {
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
-    resolveMock.mockResolvedValue({
+    resolveMock.mockResolvedValue(resolved({
       B: entry('B', { '1.2.0': {} }, '1.2.0'),
-    });
+    }));
 
     const sv = new SV('/project');
 
-    await sv.init();
-    await sv.put('B', '^1.1.0');
+    /* url имени берётся из корневого package.json#sv */
+    await sv.resolve('B', '^1.1.0');
 
-    expect(resolveMock).toHaveBeenLastCalledWith({ [url('B')]: '^1.1.0' });
+    expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^1.1.0' });
     expect(writeMock).toHaveBeenCalledWith({
       sv: { [url('B')]: '^1.1.0' },
       workspaces: ['modules/*'],
@@ -447,232 +461,234 @@ describe('SV.put', () => {
     });
   });
 
-  it('rejects a name that is not an installed module', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
-
+  it('resolves an installed module name from the git remote', async () => {
+    readMock.mockResolvedValue({
+      sv: {},
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+    localMock.getRemote.mockImplementation(async (dir: string) => (
+      dir === 'modules/B' ? url('B') : null
+    ));
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.resolve('B', '^2.0.0');
 
-    await expect(sv.put('Ghost')).rejects.toMatchObject({
+    expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^2.0.0' });
+    expect(writeMock).toHaveBeenCalledWith({
+      sv: { [url('B')]: '^2.0.0' },
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
+  });
+
+  it('rejects a name that is not an installed module', async () => {
+    readMock.mockResolvedValue({ sv: {} });
+    const sv = new SV('/project');
+
+    await expect(sv.resolve('Ghost')).rejects.toMatchObject({
       error: 'NOT_A_GIT_URL',
       details: { url: 'Ghost' },
     });
+    expect(resolveMock).not.toHaveBeenCalled();
   });
 
   it('rejects put into a parent that is not installed', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
-
+    readMock.mockImplementation(async (module?: string) => (
+      module ? null : { sv: {} }
+    ));
     const sv = new SV('/project');
 
-    await sv.init();
-    writeMock.mockClear(); /* init пишет workspaces — интересует только put */
-
-    await expect(sv.put(url('B'), 'Nope')).rejects.toMatchObject({
+    await expect(sv.resolve(url('B'), 'Nope')).rejects.toMatchObject({
       error: 'ADDON_NOT_FOUND',
       details: { name: 'Nope' },
     });
-    expect(writeMock).not.toHaveBeenCalled();
-  });
-
-  it('applies nothing when the check resolve fails', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockRejectedValue(new Error('version conflict'));
-
-    const sv = new SV('/project');
-
-    await expect(sv.put(url('B'), '^1.0.0')).rejects.toThrow(
-      'version conflict',
-    );
     expect(writeMock).not.toHaveBeenCalled();
     expect(localMock.addSubmodule).not.toHaveBeenCalled();
     expect(npmInstallMock).not.toHaveBeenCalled();
   });
 
   it('propagates an npm install failure', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
-    npmInstallMock.mockRejectedValueOnce(new Error('npm failed'));
-
-    const sv = new SV('/project');
-
-    await expect(sv.put(url('B'))).rejects.toThrow('npm failed');
-  });
-
-  it('delegates the verified mutation to dangerousPut', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
-    const sv = new SV('/project');
-
-    const dangerousPut = jest.spyOn(sv, 'dangerousPut')
-      .mockResolvedValue(undefined);
-
-    await sv.put(url('B'), '^1.0.0');
-
-    expect(dangerousPut).toHaveBeenCalledWith(
-      url('B'),
-      '^1.0.0',
-      undefined,
-    );
-  });
-});
-
-describe('SV.dangerousPut', () => {
-  it('reuses the failed put partial resolution without resolving again',
-    async () => {
-      const partial = {
-        B: entry('B', { '2.1.0': {} }, '2.1.0'),
-      };
-
-      readMock.mockResolvedValue({ sv: { [url('B')]: '^1.0.0' } });
-      resolveMock.mockRejectedValueOnce(new SVError('VERSION_CONFLICT'));
-      getResolutionMock.mockReturnValue(partial);
-      const sv = new SV('/project');
-
-      await expect(sv.put('B', '^2.0.0'))
-        .rejects.toMatchObject({ error: 'VERSION_CONFLICT' });
-      await sv.dangerousPut('B', '^2.0.0');
-
-      expect(resolveMock).toHaveBeenCalledTimes(1);
-      expect(sv.getResolution()).toBe(partial);
-      expect(writeMock).toHaveBeenCalledWith({
-        sv: { [url('B')]: '^2.0.0' },
-        workspaces: ['modules/*'],
-        'sv-dir': 'modules',
-      });
-      expect(npmInstallMock).toHaveBeenCalledTimes(1);
-    });
-
-  it('updates the failed put resolution to the version selected by dangerousPut',
-    async () => {
-      const partial = {
-        B: entry('B', {
-          '1.9.0': {},
-          '2.1.0': { A: '^1.0.0' },
-        }, '1.9.0'),
-      };
-
-      readMock.mockResolvedValue({ sv: { [url('B')]: '^1.0.0' } });
-      resolveMock.mockRejectedValueOnce(new SVError('VERSION_CONFLICT'));
-      getResolutionMock.mockReturnValue(partial);
-      localMock.listVersions.mockResolvedValue(['1.9.0', '2.1.0']);
-      const sv = new SV('/project');
-
-      await expect(sv.put('B', '^2.0.0'))
-        .rejects.toMatchObject({ error: 'VERSION_CONFLICT' });
-      await sv.dangerousPut('B', '^2.0.0');
-
-      expect(resolveMock).toHaveBeenCalledTimes(1);
-      expect(sv.getResolution().B).toMatchObject({
-        version: '2.1.0',
-        dependencies: { A: '^1.0.0' },
-      });
-    });
-
-  it('adds a module and keeps partial resolution on a conflict', async () => {
-    const partial = {
-      B: entry('B', { '2.1.0': {} }, '2.1.0'),
+    const result = {
+      B: entry('B', { '1.0.0': {} }, '1.0.0'),
     };
 
     readMock.mockResolvedValue({ sv: {} });
-    localMock.isGitRepo.mockResolvedValue(false);
-    localMock.listVersions.mockResolvedValue(['1.9.0', '2.0.0', '2.1.0']);
-    resolveMock.mockRejectedValueOnce(new Error('version conflict'));
-    getResolutionMock.mockReturnValue(partial);
+    resolveMock.mockResolvedValue(resolved(result));
+    npmInstallMock.mockRejectedValueOnce(
+      new SVError('NPM_INSTALL_FAILED'),
+    );
+
     const sv = new SV('/project');
 
-    await sv.dangerousPut(url('B'), '^2.0.0');
+    await expect(sv.resolve(url('B'))).rejects.toMatchObject({
+      error: 'NPM_INSTALL_FAILED',
+      /* Мутация package.json/modules уже применена — post-mutation
+       * resolution передаётся в details ошибки. */
+      details: { resolution: result },
+    });
+  });
+});
 
-    expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^2.0.0' });
-    expect(sv.getResolution()).toBe(partial);
-    expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
-    expect(localMock.checkout).toHaveBeenCalledWith('B', '2.1.0');
+describe('SV.resolve errors', () => {
+  it('applies nothing on resolution errors without onError', async () => {
+    const conflict = new SVError('VERSION_CONFLICT');
+
+    const partial = {
+      B: entry('B', { '1.0.0': {} }, '1.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue(resolved(partial, [conflict]));
+    const sv = new SV('/project');
+    const result = await sv.resolve(url('B'), '^1.0.0');
+
+    expect(result).toEqual({ resolution: partial, errors: [conflict] });
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(localMock.addSubmodule).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
+
+  it('applies the mutation when onError allows every error', async () => {
+    const conflict = new SVError('VERSION_CONFLICT');
+
+    const partial = {
+      B: entry('B', { '1.0.0': {} }, '1.0.0'),
+    };
+
+    readMock.mockResolvedValue({ sv: {} });
+    localMock.isGitRepo.mockImplementation(
+      async (dir: string) => dir === '/project',
+    );
+    resolveMock.mockResolvedValue(resolved(partial, [conflict]));
+    const onError = jest.fn(async () => true);
+    const sv = new SV('/project', undefined, { onError });
+    const result = await sv.resolve(url('B'), '^1.0.0');
+
+    expect(onError).toHaveBeenCalledWith(conflict);
+    expect(result).toEqual({ resolution: partial, errors: [conflict] });
     expect(writeMock).toHaveBeenCalledWith({
-      sv: { [url('B')]: '^2.0.0' },
+      sv: { [url('B')]: '^1.0.0' },
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
-    expect(npmInstallMock).toHaveBeenCalledTimes(1);
+    expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
+    expect(localMock.checkout).toHaveBeenCalledWith('B', '1.0.0');
+    expect(npmInstallMock).toHaveBeenCalled();
   });
 
-  it('keeps an untagged module installed when no version matches',
+  it('asks onError for each error until one declines', async () => {
+    const first = new SVError('ADDON_NOT_FOUND');
+    const second = new SVError('VERSION_CONFLICT');
+
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue(resolved({}, [first, second]));
+
+    const onError = jest.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const sv = new SV('/project', undefined, { onError });
+
+    await sv.resolve(url('B'));
+
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks the mutation when onError declines', async () => {
+    const conflict = new SVError('VERSION_CONFLICT');
+
+    readMock.mockResolvedValue({ sv: {} });
+    resolveMock.mockResolvedValue(resolved({}, [conflict]));
+    const onError = jest.fn(async () => false);
+    const sv = new SV('/project', undefined, { onError });
+
+    await sv.resolve(url('B'));
+
+    expect(writeMock).not.toHaveBeenCalled();
+    expect(localMock.addSubmodule).not.toHaveBeenCalled();
+    expect(npmInstallMock).not.toHaveBeenCalled();
+  });
+
+  it('does not remove modules missing from a forced partial resolution',
     async () => {
-      readMock.mockResolvedValue({ sv: {} });
-      localMock.isGitRepo.mockResolvedValue(false);
-      localMock.listVersions.mockResolvedValue([]);
-      const sv = new SV('/project');
+      const conflict = new SVError('VERSION_CONFLICT');
 
-      await sv.dangerousPut(url('B'), '^2.0.0');
-
-      expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
-      expect(localMock.checkout).not.toHaveBeenCalled();
-      expect(writeMock).toHaveBeenCalled();
-      expect(npmInstallMock).toHaveBeenCalled();
-    });
-
-  it('resolves an installed module name from package.json without init',
-    async () => {
-      readMock.mockResolvedValue({ sv: { [url('B')]: '^1.0.0' } });
-      const sv = new SV('/project');
-
-      await sv.dangerousPut('B', '^2.0.0');
-
-      expect(writeMock).toHaveBeenCalledWith({
-        sv: { [url('B')]: '^2.0.0' },
+      readMock.mockResolvedValue({
+        sv: { [url('A')]: '*' },
         workspaces: ['modules/*'],
         'sv-dir': 'modules',
       });
-      expect(resolveMock).toHaveBeenCalledWith({ [url('B')]: '^2.0.0' });
+      readFileMock.mockResolvedValue([
+        '[submodule "modules/A"]',
+        '\tpath = modules/A',
+      ].join('\n'));
+      resolveMock.mockResolvedValue(resolved({}, [conflict]));
+
+      const sv = new SV('/project', undefined, {
+        onError: async () => true,
+      });
+
+      await sv.resolve(url('B'), '^2.0.0');
+
+      /* partial-резолюция без A из .gitmodules — сносить его нельзя */
+      expect(localMock.rm).not.toHaveBeenCalled();
+      expect(writeMock).toHaveBeenCalledWith({
+        sv: { [url('A')]: '*', [url('B')]: '^2.0.0' },
+        workspaces: ['modules/*'],
+        'sv-dir': 'modules',
+      });
     });
 
-  it('keeps refreshed resolution when npm install fails', async () => {
-    const result = {
-      B: entry('B', { '2.0.0': {} }, '2.0.0'),
-    };
+  it('removes .gitmodules submodules missing from a clean resolution',
+    async () => {
+      readMock.mockResolvedValue({
+        sv: { [url('A')]: '*' },
+        workspaces: ['modules/*'],
+        'sv-dir': 'modules',
+      });
+      readFileMock.mockResolvedValue([
+        '[submodule "modules/A"]',
+        '\tpath = modules/A',
+        '[submodule "modules/B"]',
+        '\tpath = modules/B',
+      ].join('\n'));
+      resolveMock.mockResolvedValue(resolved({
+        A: entry('A', { '1.0.0': {} }, '1.0.0'),
+      }));
 
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue(result);
-    npmInstallMock.mockRejectedValueOnce(new Error('npm failed'));
-    const sv = new SV('/project');
+      const sv = new SV('/project');
 
-    await expect(sv.dangerousPut(url('B'), '^2.0.0'))
-      .rejects.toThrow('npm failed');
+      await sv.resolve();
 
-    expect(sv.getResolution()).toBe(result);
-  });
-
-  it('uses the recorded modules dir before touching git', async () => {
-    readMock.mockResolvedValue({
-      sv: {},
-      workspaces: ['addons/*'],
-      'sv-dir': 'addons',
+      expect(localMock.rm).toHaveBeenCalledWith('B');
+      expect(localMock.rm).not.toHaveBeenCalledWith('A');
     });
-    const sv = new SV('/project');
-
-    await sv.dangerousPut(url('B'));
-
-    expect(localMock.isGitRepo).toHaveBeenCalledWith('addons/B');
-  });
 });
 
-describe('SV.delete', () => {
+describe('SV.resolve delete', () => {
   it('removes a root dependency and uninstalls its module', async () => {
     readMock.mockResolvedValue({
       sv: { [url('A')]: '*' },
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
-    resolveMock.mockResolvedValueOnce({
-      A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    });
-    resolveMock.mockResolvedValue({});
+    readFileMock.mockResolvedValue([
+      '[submodule "modules/A"]',
+      '\tpath = modules/A',
+    ].join('\n'));
+    resolveMock
+      .mockResolvedValueOnce(resolved({
+        A: entry('A', { '1.0.0': {} }, '1.0.0'),
+      }))
+      .mockResolvedValue(resolved({}));
 
     const sv = new SV('/project');
 
-    await sv.init();
-    await sv.delete('A');
+    await sv.resolve();
+    await sv.resolve('A', null);
 
     expect(resolveMock).toHaveBeenLastCalledWith({});
     expect(writeMock).toHaveBeenCalledWith({
@@ -685,154 +701,120 @@ describe('SV.delete', () => {
   });
 
   it('rejects deleting a module missing from rootDeps', async () => {
-    readMock.mockResolvedValue({ sv: {} });
+    readMock.mockResolvedValue({
+      sv: {},
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
+    });
 
     const sv = new SV('/project');
 
-    await expect(sv.delete('Ghost')).rejects.toMatchObject({
+    await expect(sv.resolve('Ghost', null)).rejects.toMatchObject({
       error: 'ADDON_NOT_FOUND',
       details: { name: 'Ghost' },
     });
     expect(resolveMock).not.toHaveBeenCalled();
+    expect(localMock.rm).not.toHaveBeenCalled();
   });
 
   it('removes a dependency from the parent package.json', async () => {
     readMock.mockImplementation(async (module?: string) => (
       module === 'A'
         ? { sv: { [url('B')]: '^1.0.0' } }
-        : { sv: { [url('A')]: '*' } }
+        : {
+          sv: { [url('A')]: '*' },
+          workspaces: ['modules/*'],
+          'sv-dir': 'modules',
+        }
     ));
-    resolveMock.mockResolvedValue({
+    resolveMock.mockResolvedValue(resolved({
       A: entry('A', { '1.0.0': { B: '^1.0.0' } }, '1.0.0'),
-    });
+    }));
 
     const sv = new SV('/project');
 
-    await sv.init();
-    await sv.delete('B', 'A');
+    await sv.resolve();
+    await sv.resolve('B', null, 'A');
 
     expect(writeMock).toHaveBeenCalledWith({ sv: {} }, 'A');
   });
 
   it('rejects deleting a module the parent does not depend on', async () => {
-    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-    resolveMock.mockResolvedValue({
+    readMock.mockImplementation(async (module?: string) => (
+      module === 'A'
+        ? { sv: {} }
+        : {
+          sv: { [url('A')]: '*' },
+          workspaces: ['modules/*'],
+          'sv-dir': 'modules',
+        }
+    ));
+    resolveMock.mockResolvedValue(resolved({
       A: entry('A', { '1.0.0': {} }, '1.0.0'),
-    });
+    }));
 
     const sv = new SV('/project');
 
-    await sv.init();
-
-    await expect(sv.delete('B', 'A')).rejects.toMatchObject({
+    await expect(sv.resolve('B', null, 'A')).rejects.toMatchObject({
       error: 'ADDON_NOT_FOUND',
       details: { name: 'B' },
     });
-    /* resolve не вызывался повторно — только внутри init */
-    expect(resolveMock).toHaveBeenCalledTimes(1);
+    expect(localMock.rm).not.toHaveBeenCalled();
   });
 
-  it('delegates the verified mutation to dangerousDelete', async () => {
-    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-    resolveMock.mockResolvedValue({});
-    const sv = new SV('/project');
-
-    const dangerousDelete = jest.spyOn(sv, 'dangerousDelete')
-      .mockResolvedValue(undefined);
-
-    await sv.delete('A');
-
-    expect(dangerousDelete).toHaveBeenCalledWith('A', undefined);
-  });
-});
-
-describe('SV.dangerousDelete', () => {
-  it(
-    'removes a module and keeps partial resolution on a conflict',
-    async () => {
-      const partial = {
-        B: entry('B', { '1.0.0': {} }, '1.0.0'),
-      };
-
-      readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-      resolveMock.mockRejectedValueOnce(new Error('version conflict'));
-      getResolutionMock.mockReturnValue(partial);
-      const sv = new SV('/project');
-
-      await sv.dangerousDelete('A');
-
-      expect(resolveMock).toHaveBeenCalledWith({});
-      expect(sv.getResolution()).toBe(partial);
-      expect(localMock.rm).toHaveBeenCalledWith('A');
-      expect(writeMock).toHaveBeenCalledWith({
-        sv: {},
-        workspaces: ['modules/*'],
-        'sv-dir': 'modules',
-      });
-      expect(npmInstallMock).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it(
-    'removes only the parent dependency and keeps the shared module',
+  it('keeps a shared module installed when removed from one parent',
     async () => {
       readMock.mockImplementation(async (module?: string) => (
         module === 'A'
           ? { sv: { [url('B')]: '^1.0.0' } }
-          : { sv: { [url('A')]: '*', [url('B')]: '*' } }
+          : {
+            sv: { [url('A')]: '*', [url('B')]: '*' },
+            workspaces: ['modules/*'],
+            'sv-dir': 'modules',
+          }
       ));
+
+      const full = {
+        A: entry('A', { '1.0.0': { B: '^1.0.0' } }, '1.0.0'),
+        B: entry('B', { '1.0.0': {} }, '1.0.0'),
+      };
+
+      resolveMock
+        .mockResolvedValueOnce(resolved(full))
+        .mockResolvedValue(resolved(full));
+
       const sv = new SV('/project');
 
-      await sv.dangerousDelete('B', 'A');
+      await sv.resolve();
+      await sv.resolve('B', null, 'A');
 
+      /* B остался корневой зависимостью — сабмодуль не удаляется */
       expect(localMock.rm).not.toHaveBeenCalled();
       expect(writeMock).toHaveBeenCalledWith({ sv: {} }, 'A');
-      expect(npmInstallMock).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it('does not touch git when the dependency is missing', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    const sv = new SV('/project');
-
-    await expect(sv.dangerousDelete('Ghost')).rejects.toMatchObject({
-      error: 'ADDON_NOT_FOUND',
-      details: { name: 'Ghost' },
     });
-    expect(localMock.rm).not.toHaveBeenCalled();
-    expect(writeMock).not.toHaveBeenCalled();
-    expect(npmInstallMock).not.toHaveBeenCalled();
-  });
 });
 
-describe('SV.listVersions', () => {
-  it('returns versions of one package by name', async () => {
-    readMock.mockResolvedValue({ sv: { [url('A')]: '*' } });
-    resolveMock.mockResolvedValue({
-      A: entry('A', { '1.0.0': {}, '1.2.0': {} }, '1.2.0'),
+describe('SV.git', () => {
+  it('resolves a module name to its submodule directory', async () => {
+    readMock.mockResolvedValue({
+      sv: {},
+      workspaces: ['modules/*'],
+      'sv-dir': 'modules',
     });
-
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.git.hasChanges('A');
 
-    expect(sv.listVersions('A')).toEqual(['1.2.0', '1.0.0']);
+    expect(localMock.hasChanges).toHaveBeenCalledWith('modules/A');
+    expect(localMock.hasUnpushedCommits).toHaveBeenCalledWith('modules/A');
   });
 
-  it('rejects an unknown package name', async () => {
-    readMock.mockResolvedValue({ sv: {} });
-    resolveMock.mockResolvedValue({});
-
+  it('uses the project root without a module', async () => {
     const sv = new SV('/project');
 
-    await sv.init();
+    await sv.git.getRemote();
 
-    expect(() => sv.listVersions('Nope')).toThrow(
-      expect.objectContaining({
-        error: 'ADDON_NOT_FOUND',
-        details: { name: 'Nope' },
-      }),
-    );
+    expect(localMock.getRemote).toHaveBeenCalledWith('/project');
   });
 });
 
@@ -853,7 +835,6 @@ describe('SV.publish', () => {
     localMock.hasChanges.mockResolvedValue(true);
     readMock.mockResolvedValue({ version: '1.0.2', sv: {} });
     const sv = new SV('/project');
-    const clear = jest.spyOn((sv as any).store, 'clear');
 
     await expect(sv.publish({
       module: 'A',
@@ -883,7 +864,6 @@ describe('SV.publish', () => {
       'modules/A',
       '1.0.2-patch.4',
     );
-    expect(clear).toHaveBeenCalledTimes(1);
     },
   );
 

@@ -13,9 +13,10 @@ export type {
   TDependencies,
   TIsCandidateCompatible,
   TPubGrubResult,
+  TResolveError,
+  TResolveResult,
 } from './PubGrub';
-export { EntryStore, entryStore } from './entryStore';
 export { printError } from './printError';
-export { git, GitError, GithubError } from './git';
+export { GitError, GithubError } from './git';
 export { SVError, ERR } from './errors';
 export type { TSVErrorCode, TSVErrorDetails } from './errors';

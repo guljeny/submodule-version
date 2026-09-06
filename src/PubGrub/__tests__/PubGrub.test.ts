@@ -4,6 +4,7 @@ import type {
   IPackageEntry,
   TDependencies,
   TPubGrubResult,
+  TResolveResult,
 } from '../types';
 
 const url = (name: string) => `git@git:repo/${name}.git`;
@@ -134,6 +135,14 @@ const CandidateA = {
   },
 };
 
+const RangeA = defineModule('RangeA', {
+  '1.2.3': {},
+  '1.2.6': {},
+  '1.3.0': {},
+  '1.5.5': {},
+  '2.0.0': {},
+});
+
 const ALL_MODULES = [
   A,
   B,
@@ -164,6 +173,7 @@ const ALL_MODULES = [
   CycleC,
   SelfCycle,
   CandidateA,
+  RangeA,
 ];
 
 const source = (modules: IPackageEntry[]) => {
@@ -201,7 +211,7 @@ class TestRoot {
     [entry.url]: range,
   });
 
-  public resolve = (): Promise<TPubGrubResult> => {
+  public resolve = (): Promise<TResolveResult> => {
     const fixture = source(this.modules);
 
     this.fetched = fixture.calls;
@@ -218,30 +228,70 @@ const selected = (result: TPubGrubResult) => Object.fromEntries(
 
 describe('PubGrub resolution', () => {
   it('resolves an empty root', async () => {
-    const result = await root.resolve();
+    const { resolution, errors } = await root.resolve();
 
-    expect(result).toEqual({});
+    expect(resolution).toEqual({});
+    expect(errors).toEqual([]);
     expect(root.fetched).toEqual([]);
   });
 
   it('selects highest compatible nested versions', async () => {
     const currentRoot = root.add(A, '^1.0.0');
-    const result = await currentRoot.resolve();
+    const { resolution } = await currentRoot.resolve();
 
-    expect(selected(result)).toEqual({
+    expect(selected(resolution)).toEqual({
       A: '1.2.0',
       B: '1.2.0',
       C: '1.4.2',
       E: '0.0.3',
     });
-    expect(result.B.dependencies).toEqual({ C: '^1.4.2' });
+    expect(resolution.B.dependencies).toEqual({ C: '^1.4.2' });
+  });
+
+  it('allows minor and patch updates for a caret range', async () => {
+    const currentRoot = root.add(RangeA, '^1.2.5');
+    const { resolution } = await currentRoot.resolve();
+
+    expect(selected(resolution)).toEqual({ RangeA: '1.5.5' });
+  });
+
+  it('allows only patch updates for a tilde range', async () => {
+    const currentRoot = root.add(RangeA, '~1.2.3');
+    const { resolution } = await currentRoot.resolve();
+
+    expect(selected(resolution)).toEqual({ RangeA: '1.2.6' });
+  });
+
+  it('collects requested constraints per requester', async () => {
+    const currentRoot = root.add(A, '^1.0.0');
+    const { resolution } = await currentRoot.resolve();
+
+    expect(resolution.A.requestedVersion).toEqual({ '<root>': '^1.0.0' });
+    expect(resolution.B.requestedVersion).toEqual({ A: '^1.2.0' });
+    expect(resolution.E.requestedVersion).toEqual({ C: '^0.0.3' });
+  });
+
+  it('merges constraints of two parents in requestedVersion', async () => {
+    const currentRoot = root
+      .add(DiamondLeft)
+      .add(DiamondRight);
+
+    const { resolution } = await currentRoot.resolve();
+
+    expect(resolution.DiamondShared.requestedVersion).toEqual({
+      DiamondLeft: '^1.0.0',
+      DiamondRight: '^1.4.0',
+    });
+    expect(resolution.DiamondLeft.requestedVersion).toEqual({
+      '<root>': '*',
+    });
   });
 
   it('backtracks from an incompatible newer parent version', async () => {
     const currentRoot = root.add(BacktrackA);
-    const result = await currentRoot.resolve();
+    const { resolution } = await currentRoot.resolve();
 
-    expect(selected(result)).toEqual({
+    expect(selected(resolution)).toEqual({
       BacktrackA: '1.0.0',
       BacktrackB: '1.5.0',
     });
@@ -249,9 +299,9 @@ describe('PubGrub resolution', () => {
 
   it('backtracks through multiple dependency levels', async () => {
     const currentRoot = root.add(DeepA);
-    const result = await currentRoot.resolve();
+    const { resolution } = await currentRoot.resolve();
 
-    expect(selected(result)).toEqual({
+    expect(selected(resolution)).toEqual({
       DeepA: '1.0.0',
       DeepB: '1.0.0',
       DeepC: '1.1.0',
@@ -263,9 +313,9 @@ describe('PubGrub resolution', () => {
       .add(DiamondLeft)
       .add(DiamondRight);
 
-    const result = await currentRoot.resolve();
+    const { resolution } = await currentRoot.resolve();
 
-    expect(selected(result)).toEqual({
+    expect(selected(resolution)).toEqual({
       DiamondLeft: '1.0.0',
       DiamondRight: '1.0.0',
       DiamondShared: '1.5.0',
@@ -274,9 +324,9 @@ describe('PubGrub resolution', () => {
 
   it('does not fetch dependencies of unselected tags', async () => {
     const currentRoot = root.add(LazyA);
-    const result = await currentRoot.resolve();
+    const { resolution } = await currentRoot.resolve();
 
-    expect(selected(result)).toEqual({
+    expect(selected(resolution)).toEqual({
       LazyA: '2.0.0',
       LazyB: '2.0.0',
     });
@@ -285,9 +335,9 @@ describe('PubGrub resolution', () => {
 
   it('backs away from a circular newer version', async () => {
     const currentRoot = root.add(FallbackA);
-    const result = await currentRoot.resolve();
+    const { resolution } = await currentRoot.resolve();
 
-    expect(selected(result)).toEqual({ FallbackA: '1.0.0' });
+    expect(selected(resolution)).toEqual({ FallbackA: '1.0.0' });
   });
 
   it('selects the highest candidate accepted by the host', async () => {
@@ -298,10 +348,10 @@ describe('PubGrub resolution', () => {
       candidate => (candidate.packageJson as any)?.compatible !== false,
     );
 
-    const result = await resolver.resolve({ [CandidateA.url]: '*' });
+    const { resolution } = await resolver.resolve({ [CandidateA.url]: '*' });
 
-    expect(selected(result)).toEqual({ CandidateA: '1.0.0' });
-    expect(result.CandidateA.versions).toEqual({
+    expect(selected(resolution)).toEqual({ CandidateA: '1.0.0' });
+    expect(resolution.CandidateA.versions).toEqual({
       '1.0.0': {},
       '2.0.0': {},
     });
@@ -311,12 +361,17 @@ describe('PubGrub resolution', () => {
     const fixture = source(ALL_MODULES);
     const resolver = new PubGrub(fixture.store, () => false);
 
-    await expect(resolver.resolve({ [CandidateA.url]: '*' }))
-      .rejects.toMatchObject({
-        error: 'VERSION_CONFLICT',
-        details: { name: 'CandidateA', versions: [] },
-      });
+    const { resolution, errors } = await resolver.resolve({
+      [CandidateA.url]: '*',
+    });
 
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      error: 'VERSION_CONFLICT',
+      details: { name: 'CandidateA', versions: [] },
+    });
+
+    expect(resolution).toEqual({});
     expect(resolver.getResolution()).toEqual({});
   });
 });
@@ -331,14 +386,18 @@ describe('PubGrub errors', () => {
       [ConflictB.url]: '*',
     };
 
-    await expect(resolver.resolve(dependencies)).rejects.toMatchObject({
+    const { resolution, errors } = await resolver.resolve(dependencies);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
       error: 'VERSION_CONFLICT',
     });
 
-    expect(selected(resolver.getResolution())).toEqual({
+    expect(selected(resolution)).toEqual({
       ConflictA: '1.0.0',
       ConflictB: '1.0.0',
     });
+    expect(resolver.getResolution()).toBe(resolution);
   });
 
   it('keeps an available version when the requested one does not exist',
@@ -346,11 +405,13 @@ describe('PubGrub errors', () => {
       const fixture = source(ALL_MODULES);
       const resolver = new PubGrub(fixture.store);
 
-      await expect(resolver.resolve({
+      const { resolution, errors } = await resolver.resolve({
         [ExactA.url]: '9.0.0',
-      })).rejects.toMatchObject({ error: 'VERSION_CONFLICT' });
+      });
 
-      expect(selected(resolver.getResolution())).toEqual({
+      expect(errors[0]).toMatchObject({ error: 'VERSION_CONFLICT' });
+
+      expect(selected(resolution)).toEqual({
         ExactA: '1.0.0',
       });
     });
@@ -360,7 +421,9 @@ describe('PubGrub errors', () => {
       .add(ConflictA, '^1.0.0')
       .add(ConflictB);
 
-    await expect(currentRoot.resolve()).rejects.toMatchObject({
+    const { errors } = await currentRoot.resolve();
+
+    expect(errors[0]).toMatchObject({
       error: 'VERSION_CONFLICT',
       details: {
         name: 'ConflictA',
@@ -375,8 +438,9 @@ describe('PubGrub errors', () => {
 
   it('reports an unavailable exact version', async () => {
     const currentRoot = root.add(ExactA, '9.0.0');
+    const { errors } = await currentRoot.resolve();
 
-    await expect(currentRoot.resolve()).rejects.toMatchObject({
+    expect(errors[0]).toMatchObject({
       error: 'VERSION_CONFLICT',
       details: { name: 'ExactA', versions: ['1.0.0'] },
     });
@@ -384,8 +448,9 @@ describe('PubGrub errors', () => {
 
   it('reports a module without version tags', async () => {
     const currentRoot = root.add(Empty);
+    const { errors } = await currentRoot.resolve();
 
-    await expect(currentRoot.resolve()).rejects.toMatchObject({
+    expect(errors[0]).toMatchObject({
       error: 'VERSION_CONFLICT',
       details: { name: 'Empty', versions: [] },
     });
@@ -393,8 +458,9 @@ describe('PubGrub errors', () => {
 
   it('reports an invalid nested constraint and its owner', async () => {
     const currentRoot = root.add(InvalidA);
+    const { resolution, errors } = await currentRoot.resolve();
 
-    await expect(currentRoot.resolve()).rejects.toMatchObject({
+    expect(errors[0]).toMatchObject({
       error: 'UNKNOWN_VERSION',
       details: {
         name: 'InvalidB',
@@ -402,12 +468,70 @@ describe('PubGrub errors', () => {
         version: 'invalid',
       },
     });
+    /* Модуль с битым constraint пропускается, резолюция продолжается */
+    expect(selected(resolution)).toEqual({ InvalidA: '1.0.0' });
+  });
+
+  it('skips a root that fails to load and resolves the rest', async () => {
+    const fixture = source(ALL_MODULES);
+
+    const failingStore: IEntrySource = {
+      fetch: async (depPath: string) => {
+        if (depPath === url('A')) throw new Error('network');
+
+        return fixture.store.fetch(depPath);
+      },
+    };
+
+    const resolver = new PubGrub(failingStore);
+
+    const { resolution, errors } = await resolver.resolve({
+      [url('A')]: '*',
+      [ExactA.url]: '*',
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      error: 'ADDON_NOT_FOUND',
+      details: { name: url('A') },
+    });
+    expect(selected(resolution)).toEqual({ ExactA: '1.0.0' });
+  });
+
+  it('skips a nested module that fails to load', async () => {
+    const fixture = source(ALL_MODULES);
+
+    const failingStore: IEntrySource = {
+      fetch: async (depPath: string) => {
+        if (depPath === 'E') throw new Error('network');
+
+        return fixture.store.fetch(depPath);
+      },
+    };
+
+    const resolver = new PubGrub(failingStore);
+
+    const { resolution, errors } = await resolver.resolve({
+      [url('A')]: '*',
+    });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      error: 'ADDON_NOT_FOUND',
+      details: { name: 'E' },
+    });
+    expect(selected(resolution)).toEqual({
+      A: '1.2.0',
+      B: '1.2.0',
+      C: '1.4.2',
+    });
   });
 
   it('reports the complete circular chain', async () => {
     const currentRoot = root.add(CycleA);
+    const { errors } = await currentRoot.resolve();
 
-    await expect(currentRoot.resolve()).rejects.toMatchObject({
+    expect(errors[0]).toMatchObject({
       error: 'CIRCULAR_DEPENDENCY',
       details: {
         chain: ['CycleC', 'CycleA', 'CycleB', 'CycleC'],
@@ -417,8 +541,9 @@ describe('PubGrub errors', () => {
 
   it('reports a self dependency', async () => {
     const currentRoot = root.add(SelfCycle);
+    const { errors } = await currentRoot.resolve();
 
-    await expect(currentRoot.resolve()).rejects.toMatchObject({
+    expect(errors[0]).toMatchObject({
       error: 'CIRCULAR_DEPENDENCY',
       details: { chain: ['SelfCycle', 'SelfCycle'] },
     });

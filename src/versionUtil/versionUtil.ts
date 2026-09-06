@@ -2,12 +2,41 @@ import semver from 'semver';
 
 export type TVersionConstraint = string;
 
+/* VersionPicker хранит x.y.z-* для диапазона без верхней границы.
+ * Ранний вариант picker'а мог записать x.y.z-a.b.c; читаем его как
+ * стандартный диапазон с исключённой верхней границей. */
+const normalizePickerConstraint = (
+  value: string,
+): string | null | undefined => {
+  if (value.endsWith('-*')) {
+    const version = value.slice(0, -2);
+
+    return semver.valid(version) === version ? `>=${version}` : null;
+  }
+
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    if (value[index] !== '-') continue;
+
+    const from = value.slice(0, index);
+    const to = value.slice(index + 1);
+    if (semver.valid(from) !== from || semver.valid(to) !== to) continue;
+
+    return semver.lte(from, to) ? `>=${from} <${to}` : null;
+  }
+
+  return undefined;
+};
+
 const normalizeConstraint = (constraint = '*'): string | null => {
   const value = constraint.trim();
 
   if (!value) return null;
 
-  return semver.validRange(value);
+  const pickerConstraint = normalizePickerConstraint(value);
+
+  return pickerConstraint === undefined
+    ? semver.validRange(value)
+    : pickerConstraint;
 };
 
 const validate = (value: string, range = false): boolean => {

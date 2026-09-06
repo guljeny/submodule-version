@@ -11,4 +11,6 @@ export type {
   TDependencies,
   TIsCandidateCompatible,
   TPubGrubResult,
+  TResolveError,
+  TResolveResult,
 } from './types';

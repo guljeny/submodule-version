@@ -1,6 +1,12 @@
 import chalk from 'chalk';
 import yargs from 'yargs';
-import { SV, SVError } from '../src';
+import {
+  SV,
+  SVError,
+  TResolveError,
+  printError,
+  versionUtil,
+} from '../src';
 import { log } from './log';
 import { handleErrors } from './handleErrors';
 
@@ -12,18 +18,31 @@ const splitPath = (modulePath: string): { name: string, parent?: string } => {
   return { name, parent: parts.pop() };
 };
 
+/*
+ * Ошибки резолюции: при --force команда уже применила мутацию — печатаем
+ * как warning и выходим с 0; без --force мутации не было — exit 1.
+ */
+const reportErrors = (errors: TResolveError[], force: boolean): void => {
+  if (!errors.length) return;
+
+  errors.forEach(error => {
+    const paint = force ? chalk.yellow : chalk.red;
+
+    log.message(paint(printError(error)));
+  });
+
+  if (!force) log.error('Resolve failed');
+};
+
+/* onError CLI — флаг --force: любые ошибки резолюции разрешены. */
 const makeEvent = (
   event: (sv: SV, arg: any) => Promise<void>,
-  { skipInit = false } = {},
 ) => async (arg: any) => {
-  const sv = new SV(process.cwd(), arg.modulesDir);
+  const sv = new SV(process.cwd(), arg.modulesDir, {
+    onError: async () => !!arg.force,
+  });
 
   try {
-    /* publish умеет работать с ещё не git/npm-инициализированным проектом */
-    if (!skipInit && arg.verify !== false) {
-      await sv.init();
-    }
-
     await event(sv, arg);
   } catch (e) {
     handleErrors(e as Error);
@@ -31,86 +50,96 @@ const makeEvent = (
 };
 
 const put = makeEvent(async (sv, arg) => {
-  const { url: gitUrl, target, ver, verify } = arg as {
+  const { url: gitUrl, target, ver, force } = arg as {
     url: string,
     target?: string,
     ver?: string,
-    verify?: boolean,
+    force?: boolean,
   };
 
-  const method = verify === false ? sv.dangerousPut : sv.put;
+  const { errors } = await sv.resolve(
+    gitUrl,
+    ver || target,
+    ver ? target : undefined,
+  );
 
-  await method(gitUrl, ver || target, ver ? target : undefined);
+  reportErrors(errors, !!force);
 });
 
 const update = makeEvent(async (sv, arg) => {
-  const { path: modulePath } = arg as { path?: string };
+  const { path: modulePath, force } = arg as {
+    path?: string,
+    force?: boolean,
+  };
 
   if (!modulePath) {
-    /* init внутри makeEvent уже пересобрал модули на максимально разрешённые */
-    log.message(chalk.green.bold('Modules are up to date!'));
+    /* resolve без аргументов пересобирает модули на максимально разрешённые */
+    const { errors } = await sv.resolve();
+
+    reportErrors(errors, !!force);
+
+    if (!errors.length) {
+      log.message(chalk.green.bold('Modules are up to date!'));
+    }
 
     return;
   }
 
   const { name, parent } = splitPath(modulePath);
-  const entry = sv.getResolution()[name];
+  const { errors } = await sv.resolve(name, '*', parent);
 
-  if (!entry) throw new SVError('ADDON_NOT_FOUND', { name });
-
-  await sv.put(entry.url, '*', parent);
+  reportErrors(errors, !!force);
 });
 
 const del = makeEvent(async (sv, arg) => {
-  const { path: modulePath, verify } = arg as {
+  const { path: modulePath, force } = arg as {
     path: string,
-    verify?: boolean,
+    force?: boolean,
   };
   const { name, parent } = splitPath(modulePath);
+  const { errors } = await sv.resolve(name, null, parent);
 
-  const method = verify === false ? sv.dangerousDelete : sv.delete;
-
-  await method(name, parent);
+  reportErrors(errors, !!force);
 });
 
 const listVersions = makeEvent(async (sv, arg) => {
-  const { name, installed } = arg as { name?: string, installed?: boolean };
+  const { name, installed, force } = arg as {
+    name?: string,
+    installed?: boolean,
+    force?: boolean,
+  };
+
+  const { resolution, errors } = await sv.resolve();
+
+  reportErrors(errors, !!force);
+
+  if (name && !resolution[name]) {
+    throw new SVError('ADDON_NOT_FOUND', { name });
+  }
+
+  const names = name ? [name] : Object.keys(resolution);
 
   if (installed) {
-    const resolution = sv.getResolution();
-
-    if (name && !resolution[name]) {
-      throw new SVError('ADDON_NOT_FOUND', { name });
-    }
-
-    const names = name ? [name] : Object.keys(resolution);
-
-    await Promise.all(names.map(async moduleName => {
-      const version = await sv.currentVersion(moduleName);
-
+    names.forEach(moduleName => {
       log.message(
         chalk.bold(moduleName),
-        version || chalk.red('no version tag'),
+        resolution[moduleName].version || chalk.red('no version tag'),
       );
-    }));
-
-    return;
-  }
-
-  const versions = sv.listVersions(name);
-
-  if (name) {
-    log.message(chalk.bold(name), (versions as string[]).join(', '));
-
-    return;
-  }
-
-  Object.entries(versions as Record<string, string[]>)
-    .forEach(([moduleName, moduleVersions]) => {
-      log.message(chalk.bold(moduleName), moduleVersions.join(', '));
     });
+
+    return;
+  }
+
+  names.forEach(moduleName => {
+    const versions = versionUtil.sort(
+      Object.keys(resolution[moduleName].versions),
+    );
+
+    log.message(chalk.bold(moduleName), versions.join(', '));
+  });
 });
 
+/* publish умеет работать с ещё не git/npm-инициализированным проектом */
 const publish = makeEvent(async (sv, arg) => {
   const { module, bump, message, repoUrl } = arg as {
     module?: string,
@@ -127,12 +156,16 @@ const publish = makeEvent(async (sv, arg) => {
     chalk.green.bold('version'),
     chalk.bgGreen.black(` ${version} `),
   );
-}, { skipInit: true });
+});
 
-const validate = makeEvent(async sv => {
-  sv.getResolution();
+const validate = makeEvent(async (sv, arg) => {
+  const { errors } = await sv.resolve();
 
-  log.message(chalk.green.bold('Everything is up to date!🔥'));
+  reportErrors(errors, !!arg.force);
+
+  if (!errors.length) {
+    log.message(chalk.green.bold('Everything is up to date!🔥'));
+  }
 });
 
 export const s = yargs.scriptName('sv')
@@ -141,6 +174,11 @@ export const s = yargs.scriptName('sv')
     type: 'string',
     describe: 'Directory where submodules live'
       + ' (stored in package.json as sv-dir)',
+  })
+  .option('force', {
+    type: 'boolean',
+    default: false,
+    describe: 'Apply changes even when dependency resolution reports errors',
   })
   .command(
     ['$0'],
@@ -170,10 +208,6 @@ export const s = yargs.scriptName('sv')
       type: 'string',
       alias: 'v',
       describe: 'Version to install',
-    }).option('verify', {
-      type: 'boolean',
-      default: true,
-      describe: 'Verify dependency versions (disable with --no-verify)',
     }),
     put,
   )
@@ -183,10 +217,6 @@ export const s = yargs.scriptName('sv')
     y => y.positional('path', {
       type: 'string',
       describe: 'Submodule path (A.B.C)',
-    }).option('verify', {
-      type: 'boolean',
-      default: true,
-      describe: 'Verify dependency versions (disable with --no-verify)',
     }),
     del,
   )

@@ -1,5 +1,6 @@
 import { entryStore } from '../entryStore';
 import { SVError } from '../errors';
+import { GithubError } from '../git';
 import { versionUtil } from '../versionUtil';
 import {
   ICircularConflict,
@@ -13,6 +14,8 @@ import {
   TConflict,
   TDependencies,
   TPubGrubResult,
+  TResolveError,
+  TResolveResult,
 } from './types';
 
 interface ISolverState {
@@ -86,20 +89,29 @@ export class PubGrub {
 
   private compatibleVersions = new Map<string, string[]>();
 
+  /* Ошибки текущего прогона resolve: конфликты солвера и сбои загрузки. */
+  private errors: TResolveError[] = [];
+
   constructor (
     private source: IEntrySource = entryStore,
     private isCandidateCompatible?: TIsCandidateCompatible,
   ) {}
 
+  /*
+   * Resolve никогда не кидает исключений: конфликты солвера и ошибки
+   * данных/загрузки собираются в errors, а resolution остаётся
+   * наилучшим частичным результатом.
+   */
   public resolve = async (
     rootDependencies: TDependencies,
-  ): Promise<TPubGrubResult> => {
+  ): Promise<TResolveResult> => {
     this.entries = new Map();
     this.resolution = {};
     this.partialState = null;
     this.incompatibilities = [];
     this.incompatibilityKeys = new Set();
     this.compatibleVersions = new Map();
+    this.errors = [];
 
     const state: ISolverState = {
       selected: new Map([[ROOT, ROOT_VERSION]]),
@@ -109,50 +121,76 @@ export class PubGrub {
 
     this.rememberState(state);
 
-    try {
-      const roots = await Promise.all(
-        Object.entries(rootDependencies).map(async ([depPath, range]) => ({
-          entry: await this.load(depPath),
-          range: range || '*',
-        })),
+    const depList = Object.entries(rootDependencies);
+
+    /* Корень с ошибкой загрузки пропускается, резолюция идёт без него. */
+    const roots = await Promise.allSettled(
+      depList.map(async ([depPath, range]) => ({
+        entry: await this.load(depPath),
+        range: range || '*',
+      })),
+    );
+
+    roots.forEach((outcome, index) => {
+      if (outcome.status === 'rejected') {
+        const depPath = depList[index][0];
+
+        this.errors.push(this.asResolveError(outcome.reason, depPath));
+
+        return;
+      }
+
+      const { entry, range } = outcome.value;
+
+      try {
+        this.assertConstraint(entry.name, range, ROOT);
+      } catch (error) {
+        this.errors.push(this.asResolveError(error, entry.name));
+
+        return;
+      }
+
+      const requirement = this.requirement(
+        entry.name,
+        range,
+        ROOT,
+        [ROOT, entry.name],
       );
 
-      roots.forEach(({ entry, range }) => {
-        this.assertConstraint(entry.name, range, ROOT);
-
-        const requirement = this.requirement(
-          entry.name,
-          range,
-          ROOT,
-          [ROOT, entry.name],
-        );
-
-        this.addIncompatibility({
-          terms: [
-            { module: ROOT, range: ROOT_VERSION, positive: true },
-            { module: entry.name, range, positive: false },
-          ],
-          cause: { type: 'root', requirement },
-        });
+      this.addIncompatibility({
+        terms: [
+          { module: ROOT, range: ROOT_VERSION, positive: true },
+          { module: entry.name, range, positive: false },
+        ],
+        cause: { type: 'root', requirement },
       });
+    });
 
-      this.rememberState(state);
+    this.rememberState(state);
 
-      const result = await this.search(state);
+    const result = await this.search(state);
 
-      if (!result.ok) throw this.toError(result.conflict);
+    if (!result.ok) this.errors.push(this.toError(result.conflict));
 
-      this.resolution = this.makeResolution(result.state);
+    this.resolution = result.ok
+      ? this.makeResolution(result.state)
+      : this.makeResolution(this.partialState, true);
 
-      return this.resolution;
-    } catch (error) {
-      this.resolution = this.makeResolution(this.partialState, true);
-
-      throw error;
-    }
+    return { resolution: this.resolution, errors: this.errors };
   };
 
   public getResolution = (): TPubGrubResult => this.resolution;
+
+  /* Ошибки источника данных приводятся к типизированным ошибкам резолюции. */
+  // eslint-disable-next-line class-methods-use-this
+  private asResolveError = (error: unknown, name: string): TResolveError => {
+    if (error instanceof SVError || error instanceof GithubError) return error;
+
+    return new SVError('ADDON_NOT_FOUND', {
+      name,
+      reason: (error as Error)?.message || String(error),
+    });
+  };
 
   private rememberState = (state: ISolverState): void => {
     if (
@@ -162,6 +200,35 @@ export class PubGrub {
 
     this.partialState = cloneState(state);
   };
+
+  /* 'Parent@1.0.0' → 'Parent'; '<root>' и '<conflict>' остаются как есть. */
+  // eslint-disable-next-line class-methods-use-this
+  private requesterOf = (requiredBy: string): string => {
+    if (requiredBy === ROOT) return ROOT;
+
+    const at = requiredBy.lastIndexOf('@');
+
+    return at > 0 ? requiredBy.slice(0, at) : requiredBy;
+  };
+
+  /*
+   * requestedVersion — позитивные требования к модулю: requester → range.
+   * Выведенные солвером требования ('<conflict>') не привязаны
+   * к редактируемому манифесту и пропускаются.
+   */
+  private requestedVersionsOf = (
+    state: ISolverState | null,
+    name: string,
+  ): Record<string, string> => Object.fromEntries(
+    (state?.requirements.get(name) || [])
+      .filter(requirement => (
+        requirement.positive && requirement.requiredBy !== '<conflict>'
+      ))
+      .map(requirement => [
+        this.requesterOf(requirement.requiredBy),
+        requirement.range,
+      ]),
+  );
 
   private makeResolution = (
     state: ISolverState | null,
@@ -189,6 +256,7 @@ export class PubGrub {
         ...entry,
         version,
         dependencies: { ...entry.versions[version] },
+        requestedVersion: this.requestedVersionsOf(state, name),
       }]];
     }),
   );
@@ -402,16 +470,36 @@ export class PubGrub {
     version: string,
   ): Promise<ICircularConflict | null> => {
     const dependencies = entry.versions[version] || {};
-    const dependencyNames = Object.keys(dependencies);
 
-    Object.entries(dependencies).forEach(([name, range]) => {
-      this.assertConstraint(name, range, `${entry.name}@${version}`);
-    });
+    /* Невалидный constraint не роняет резолюцию: модуль пропускается. */
+    const validNames = Object.entries(dependencies)
+      .filter(([name, range]) => {
+        try {
+          this.assertConstraint(name, range, `${entry.name}@${version}`);
 
-    await Promise.all(dependencyNames.map(name => this.load(name)));
+          return true;
+        } catch (error) {
+          this.errors.push(this.asResolveError(error, name));
+
+          return false;
+        }
+      })
+      .map(([name]) => name);
+
+    await Promise.all(validNames.map(async name => {
+      try {
+        await this.load(name);
+      } catch (error) {
+        this.errors.push(this.asResolveError(error, name));
+      }
+    }));
+
+    const dependencyNames = validNames.filter(name => this.entries.has(name));
+
     state.edges.set(entry.name, dependencyNames);
 
-    for (const [name, range] of Object.entries(dependencies)) {
+    for (const name of dependencyNames) {
+      const range = dependencies[name];
       const path = findPath(state.edges, name, entry.name);
 
       if (path) {
@@ -453,6 +541,9 @@ export class PubGrub {
     if (known) return known;
 
     const entry = await this.source.fetch(depPath);
+
+    if (!entry) throw new SVError('ADDON_NOT_FOUND', { name: depPath });
+
     const duplicate = this.entries.get(entry.name);
 
     if (duplicate && duplicate.url !== entry.url) {
@@ -653,7 +744,7 @@ export class PubGrub {
 }
 
 export const pubGrub = {
-  resolve: (rootDependencies: TDependencies): Promise<TPubGrubResult> => (
+  resolve: (rootDependencies: TDependencies): Promise<TResolveResult> => (
     new PubGrub().resolve(rootDependencies)
   ),
 };

@@ -1,3 +1,6 @@
+import type { SVError } from '../errors';
+import type { GithubError } from '../git';
+
 export type TDependencies = Record<string, string>;
 
 export interface ICandidate {
@@ -19,9 +22,23 @@ export interface IPackageEntry {
 export interface IResolvedPackage extends IPackageEntry {
   version: string;
   dependencies: TDependencies;
+  /*
+   * Кто какой диапазон запросил: '<root>' — корневой package.json,
+   * имя родителя — манифест версии родителя (resolution плоский,
+   * поэтому 'Parent@version' сворачивается до имени).
+   */
+  requestedVersion: Record<string, string>;
 }
 
 export type TPubGrubResult = Record<string, IResolvedPackage>;
+
+/* Ошибки резолюции: конфликты солвера и сбои загрузки данных модулей. */
+export type TResolveError = SVError | GithubError;
+
+export type TResolveResult = {
+  resolution: TPubGrubResult;
+  errors: TResolveError[];
+};
 
 export interface IEntrySource {
   fetch(depPath: string): Promise<IPackageEntry>;
