@@ -6,6 +6,8 @@ import { RunOptions } from './runOptions';
 const existsAsync = promisify(fs.exists);
 const readFileAsync = promisify(fs.readFile);
 const writeFileAsync = promisify(fs.writeFile);
+const renameAsync = promisify(fs.rename);
+const unlinkAsync = promisify(fs.unlink);
 const JSON_NAME = 'package.json';
 
 type TJSONPath = string | null;
@@ -38,6 +40,18 @@ export const pkgJSONManager = {
 
     if (!jsonPath) return;
 
-    await writeFileAsync(jsonPath, JSON.stringify(data, null, 2));
+    const temporaryPath = `${jsonPath}.${process.pid}.${Date.now()}.tmp`;
+
+    try {
+      await writeFileAsync(temporaryPath, JSON.stringify(data, null, 2));
+      await renameAsync(temporaryPath, jsonPath);
+    } catch (error) {
+      try {
+        await unlinkAsync(temporaryPath);
+      } catch {
+        // Временный файл не был создан либо уже перемещён.
+      }
+      throw error;
+    }
   },
 };

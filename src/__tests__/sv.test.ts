@@ -24,6 +24,10 @@ jest.mock('../git', () => {
       parseUrl: actual.git.parseUrl,
       local: {
         isGitRepo: jest.fn(async () => true),
+        isSubmoduleRegistered: jest.fn(async () => true),
+        listRegisteredSubmodules: jest.fn(async (names: string[]) => names),
+        prepareSubmodule: jest.fn(async () => undefined),
+        discardPreparedSubmodule: jest.fn(async () => undefined),
         addSubmodule: jest.fn(async () => undefined),
         checkout: jest.fn(async () => undefined),
         rm: jest.fn(async () => undefined),
@@ -149,6 +153,10 @@ beforeEach(() => {
   resolveMock.mockResolvedValue(resolved({}));
   readFileMock.mockRejectedValue(new Error('ENOENT'));
   localMock.isGitRepo.mockResolvedValue(true);
+  localMock.isSubmoduleRegistered.mockResolvedValue(true);
+  localMock.listRegisteredSubmodules.mockImplementation(
+    async (names: string[]) => names,
+  );
   localMock.currentVersion.mockResolvedValue(null);
   localMock.listVersions.mockResolvedValue([]);
   localMock.tagsAtHead.mockResolvedValue([]);
@@ -316,6 +324,7 @@ describe('SV.resolve validation', () => {
     localMock.isGitRepo.mockImplementation(
       async (dir: string) => dir === '/project',
     );
+    localMock.listRegisteredSubmodules.mockResolvedValue([]);
     resolveMock.mockResolvedValue(resolved({
       A: entry('A', { '1.0.0': {} }, '1.0.0'),
     }));
@@ -397,6 +406,7 @@ describe('SV.resolve put', () => {
     localMock.isGitRepo.mockImplementation(
       async (dir: string) => dir === '/project',
     );
+    localMock.listRegisteredSubmodules.mockResolvedValue([]);
     resolveMock.mockResolvedValue(resolved({
       B: entry('B', { '1.2.0': {} }, '1.2.0'),
     }));
@@ -411,6 +421,7 @@ describe('SV.resolve put', () => {
       workspaces: ['modules/*'],
       'sv-dir': 'modules',
     });
+    expect(localMock.prepareSubmodule).toHaveBeenCalledWith(url('B'));
     expect(localMock.addSubmodule).toHaveBeenCalledWith(url('B'));
     expect(localMock.checkout).toHaveBeenCalledWith('B', '1.2.0');
     expect(npmInstallMock).toHaveBeenCalled();
@@ -633,6 +644,7 @@ describe('SV.resolve errors', () => {
     localMock.isGitRepo.mockImplementation(
       async (dir: string) => dir === '/project',
     );
+    localMock.listRegisteredSubmodules.mockResolvedValue([]);
     resolveMock.mockResolvedValue(resolved(partial, [conflict]));
     const onError = jest.fn(async () => true);
     const sv = new SV('/project', undefined, { onError });
@@ -649,6 +661,93 @@ describe('SV.resolve errors', () => {
     expect(localMock.checkout).toHaveBeenCalledWith('B', '1.0.0');
     expect(npmInstallMock).toHaveBeenCalled();
   });
+
+  it('keeps local commits when their base tag is already selected',
+    async () => {
+      readMock.mockResolvedValue({
+        sv: { [url('B')]: '^1.2.0' },
+        workspaces: ['modules/*'],
+        'sv-dir': 'modules',
+      });
+      resolveMock.mockResolvedValue(resolved({
+        B: entry('B', { '1.2.0': {} }, '1.2.0'),
+      }));
+      /* currentVersion уже учитывает локальные коммиты поверх тега. */
+      localMock.currentVersion.mockResolvedValue('1.2.0');
+
+      const sv = new SV('/project');
+
+      await sv.resolve();
+
+      expect(localMock.checkout).not.toHaveBeenCalled();
+      expect(npmInstallMock).not.toHaveBeenCalled();
+    });
+
+  it('prepares clones in parallel and registers them sequentially',
+    async () => {
+      readMock.mockResolvedValue({ sv: {} });
+      localMock.isGitRepo.mockImplementation(
+        async (dir: string) => dir === '/project',
+      );
+      localMock.listRegisteredSubmodules.mockResolvedValue([]);
+      resolveMock.mockResolvedValue(resolved({
+        A: entry('A', { '1.0.0': {} }, '1.0.0'),
+        B: entry('B', { '1.0.0': {} }, '1.0.0'),
+      }));
+
+      let prepared = 0;
+      let releasePreparation!: () => void;
+
+      const bothPrepared = new Promise<void>(resolve => {
+        releasePreparation = resolve;
+      });
+
+      localMock.prepareSubmodule.mockImplementation(async () => {
+        prepared += 1;
+        if (prepared === 2) releasePreparation();
+        await bothPrepared;
+      });
+
+      let activeRegistrations = 0;
+      let maxActiveRegistrations = 0;
+
+      localMock.addSubmodule.mockImplementation(async () => {
+        activeRegistrations += 1;
+        maxActiveRegistrations = Math.max(
+          maxActiveRegistrations,
+          activeRegistrations,
+        );
+        await Promise.resolve();
+        activeRegistrations -= 1;
+      });
+
+      const sv = new SV('/project');
+      await sv.resolve(url('A'));
+
+      expect(prepared).toBe(2);
+      expect(maxActiveRegistrations).toBe(1);
+      expect(localMock.addSubmodule).toHaveBeenCalledTimes(2);
+    });
+
+  it('does not write package.json when Git synchronization fails',
+    async () => {
+      readMock.mockResolvedValue({ sv: {} });
+      localMock.isGitRepo.mockImplementation(
+        async (dir: string) => dir === '/project',
+      );
+      localMock.listRegisteredSubmodules.mockResolvedValue([]);
+      resolveMock.mockResolvedValue(resolved({
+        B: entry('B', { '1.0.0': {} }, '1.0.0'),
+      }));
+      localMock.addSubmodule.mockRejectedValueOnce(new Error('index.lock'));
+
+      const sv = new SV('/project');
+
+      await expect(sv.resolve(url('B'))).rejects.toThrow('index.lock');
+      expect(localMock.discardPreparedSubmodule).toHaveBeenCalledWith('B');
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(npmInstallMock).not.toHaveBeenCalled();
+    });
 
   it('asks onError for each error until one declines', async () => {
     const first = new SVError('ADDON_NOT_FOUND');

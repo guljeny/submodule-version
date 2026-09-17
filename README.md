@@ -54,9 +54,11 @@ The first two requirements can share a `1.x` release, but the slider requires `2
   }
   ```
 - Each submodule has [version](#versioning) tags, and `sv` uses the list of these tags to resolve dependencies
-- The installed version of a submodule is the version tag git `HEAD` points at
+- The selected version of a submodule is the nearest semver tag in the
+  first-parent history of `HEAD`; local commits on top keep that base version
 - `Submodule version` resolves the newest compatible set with **PubGrub** and loads nested repositories only when a selected version requires them
-- `sv` never switches a submodule version if it has uncommitted changes or unpushed commits — your local work is always kept intact 🧯
+- When the resolved version is already selected, `sv` does not checkout the
+  tag again, so local commits and working-tree changes stay intact 🧯
 - After modules are installed, switched or removed, `sv` runs `npm install` automatically — no manual `npm i` is needed (on plain `npx sv` it runs only when something actually changed)
 
 ## Versioning

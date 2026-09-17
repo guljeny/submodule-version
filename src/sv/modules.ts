@@ -1,4 +1,5 @@
 import path from 'path';
+import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { TPubGrubResult } from '../PubGrub';
 import { git } from '../git';
@@ -98,20 +99,98 @@ export const syncModules = async (
   allowRemove: boolean,
 ): Promise<boolean> => {
   let changed = false;
+  const entries = Object.entries(resolution);
 
-  await Promise.all(Object.entries(resolution).map(async ([name, entry]) => {
+  const registeredModules = new Set(
+    await git.local.listRegisteredSubmodules(entries.map(([name]) => name)),
+  );
+
+  /* Чтения независимы и остаются параллельными. Отдельно проверяем
+   * регистрацию: после прерванного submodule add каталог уже может быть
+   * Git-репозиторием, хотя superproject о нём ещё не знает. */
+  const states = await Promise.all(entries.map(async ([name, entry]) => {
     const dir = path.join(RunOptions.modulesDir, name);
+    const exists = await git.local.isGitRepo(dir);
+    const registered = registeredModules.has(name);
 
-    if (!await git.local.isGitRepo(dir)) {
-      await git.local.addSubmodule(entry.url);
-      changed = true;
-    }
+    const currentVersion = exists
+      ? await git.local.currentVersion(name)
+      : null;
 
-    if (await git.local.currentVersion(name) !== entry.version) {
-      await git.local.checkout(name, entry.version);
-      changed = true;
-    }
+    return {
+      name,
+      entry,
+      exists,
+      registered,
+      currentVersion,
+      pathExisted: existsSync(path.join(RunOptions.cwd, dir)),
+    };
   }));
+
+  const missing = states.filter(state => !state.exists);
+  const createdByOperation = missing.filter(state => !state.pathExisted);
+
+  /* Clone — медленная сетевая часть, но корневой index не меняет. */
+  const preparation = await Promise.allSettled(missing.map(state => (
+    git.local.prepareSubmodule(state.entry.url)
+  )));
+
+  const preparationError = preparation.find(
+    result => result.status === 'rejected',
+  );
+
+  const discardPrepared = async (): Promise<void> => {
+    /* cleanup тоже трогает root index, если модуль успел зарегистрироваться. */
+    for (const state of [...createdByOperation].reverse()) {
+      try {
+        await git.local.discardPreparedSubmodule(state.name);
+      } catch {
+        // Сохраняем исходную ошибку операции; следующий resolve увидит partial.
+      }
+    }
+  };
+
+  if (preparationError?.status === 'rejected') {
+    await discardPrepared();
+    throw preparationError.reason;
+  }
+
+  /* Checkout разных рабочих копий использует разные вложенные index-файлы.
+   * currentVersion возвращает базовый semver-тег и не вынуждает checkout при
+   * локальных коммитах поверх уже выбранной версии. */
+  const versionChanges = states.filter(
+    state => state.currentVersion !== state.entry.version,
+  );
+
+  const unregistered = states.filter(state => !state.registered);
+
+  try {
+    /* До регистрации выбираем нужный commit: именно его submodule add
+     * запишет как gitlink. Эти checkout работают в независимых репозиториях. */
+    await Promise.all(versionChanges
+      .filter(state => !state.registered)
+      .map(state => git.local.checkout(state.name, state.entry.version)));
+
+    /* submodule add меняет общий index и .gitmodules. Регистрация уже
+     * подготовленных репозиториев быстрая, но обязана идти последовательно. */
+    for (const moduleState of unregistered) {
+      await git.local.addSubmodule(moduleState.entry.url);
+    }
+
+    /* Уже зарегистрированные модули можно переключать параллельно: каждый
+     * checkout меняет только собственный вложенный index. */
+    await Promise.all(versionChanges
+      .filter(state => state.registered)
+      .map(state => git.local.checkout(state.name, state.entry.version)));
+  } catch (error) {
+    await discardPrepared();
+    throw error;
+  }
+
+  if (missing.length || versionChanges.length
+    || unregistered.length) {
+    changed = true;
+  }
 
   if (!allowRemove) return changed;
 
@@ -120,7 +199,8 @@ export const syncModules = async (
 
   if (removed.length) changed = true;
 
-  await Promise.all(removed.map(name => git.local.rm(name)));
+  /* git rm также меняет общий index — удаления не запускаем параллельно. */
+  for (const name of removed) await git.local.rm(name);
 
   return changed;
 };

@@ -174,8 +174,11 @@ export const resolve = async (
 
   pinDefaultRange(override, resolution, defaultRange);
 
-  const jsonChanged = await syncPkgJson(baseJson, override, baseChanged);
   const modulesChanged = await syncModules(resolution, !errors.length);
+  /* Git-синхронизация может упасть (например, на внешнем index.lock).
+   * Манифест фиксируем только после неё, чтобы не оставить зависимость в sv
+   * без установленного сабмодуля. */
+  const jsonChanged = await syncPkgJson(baseJson, override, baseChanged);
 
   /*
    * npm install запускается только когда реально что-то изменилось —

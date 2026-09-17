@@ -1,4 +1,5 @@
 import { exec } from 'child_process';
+import { rm } from 'fs/promises';
 import { promisify } from 'util';
 import path from 'path';
 import { parseGitUrl } from '../parseGitUrl';
@@ -7,20 +8,34 @@ import { RunOptions } from '../../runOptions';
 import { GitError } from '../GitError';
 
 const execAsync = promisify(exec);
+const INDEX_LOCK_RETRY_DELAYS = [50, 100, 250, 500];
 
 /* stderr упавшей git-команды — единственный источник настоящей причины */
 const stderrOf = (error: unknown): string => (
   (error as { stderr?: string })?.stderr || ''
 ).trim();
 
+const wait = (delay: number): Promise<void> => (
+  new Promise(resolve => setTimeout(resolve, delay))
+);
+
+const isIndexLockError = (error: unknown): boolean => (
+  /index\.lock/i.test(stderrOf(error))
+);
+
 export const local = {
-  addSubmodule: async (url: string): Promise<void> => {
+  /* Clone не меняет index/.gitmodules корневого проекта, поэтому несколько
+   * отсутствующих модулей можно подготавливать параллельно. addSubmodule ниже
+   * затем быстро зарегистрирует уже существующий репозиторий. */
+  prepareSubmodule: async (url: string): Promise<void> => {
     const { name } = parseGitUrl(url);
     const module = path.join(RunOptions.modulesDir, name);
 
+    if (await local.isGitRepo(module)) return;
+
     try {
       await execAsync(
-        `git submodule add "${url}" "${module}"`,
+        `git clone -q "${url}" "${module}"`,
         { cwd: RunOptions.cwd },
       );
     } catch (error) {
@@ -28,6 +43,102 @@ export const local = {
         url,
         reason: stderrOf(error),
       });
+    }
+  },
+
+  /* Проверяется именно регистрация в superproject, а не только наличие
+   * самостоятельного Git-репозитория в каталоге модуля. */
+  isSubmoduleRegistered: async (name: string): Promise<boolean> => {
+    const module = path.join(RunOptions.modulesDir, name);
+
+    try {
+      const res = await execAsync(
+        `git submodule status -- "${module}"`,
+        { cwd: RunOptions.cwd },
+      );
+
+      return !!res.stdout.toString().trim();
+    } catch {
+      return false;
+    }
+  },
+
+  /* Один root Git-вызов вместо submodule status для каждого элемента дерева. */
+  listRegisteredSubmodules: async (names?: string[]): Promise<string[]> => {
+    try {
+      const res = await execAsync(
+        'git submodule status',
+        { cwd: RunOptions.cwd },
+      );
+
+      const prefix = `${RunOptions.modulesDir}/`;
+      const requested = names ? new Set(names) : null;
+
+      return res.stdout.toString().split(/\r?\n/).flatMap(line => {
+        const modulePath = line.trim().split(/\s+/)[1];
+
+        const moduleName = modulePath?.startsWith(prefix)
+          ? modulePath.slice(prefix.length)
+          : null;
+
+        return moduleName && (!requested || requested.has(moduleName))
+          ? [moduleName]
+          : [];
+      });
+    } catch {
+      return [];
+    }
+  },
+
+  /* Удаляется только каталог, который вызывающий пометил как созданный
+   * текущей попыткой. Если add уже успел зарегистрировать модуль, сначала
+   * корректно убираем gitlink/.gitmodules через git rm. */
+  discardPreparedSubmodule: async (name: string): Promise<void> => {
+    const module = path.join(RunOptions.modulesDir, name);
+
+    if (await local.isSubmoduleRegistered(name)) {
+      await local.rm(name);
+
+      return;
+    }
+
+    await Promise.all([
+      rm(path.join(RunOptions.cwd, module), { recursive: true, force: true }),
+      rm(path.join(
+        RunOptions.cwd,
+        '.git/modules',
+        module,
+      ), { recursive: true, force: true }),
+    ]);
+  },
+
+  addSubmodule: async (url: string): Promise<void> => {
+    const { name } = parseGitUrl(url);
+    const module = path.join(RunOptions.modulesDir, name);
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await execAsync(
+          `git submodule add "${url}" "${module}"`,
+          { cwd: RunOptions.cwd },
+        );
+
+        return;
+      } catch (error) {
+        /* Команда может завершиться ошибкой уже после успешной регистрации.
+         * Повторять её в таком состоянии нельзя: Git ответит already exists. */
+        if (await local.isSubmoduleRegistered(name)) return;
+
+        const retryDelay = INDEX_LOCK_RETRY_DELAYS[attempt];
+        if (retryDelay === undefined || !isIndexLockError(error)) {
+          throw new GitError('GIT_SUBMODULE_ADD_FAILED', {
+            url,
+            reason: stderrOf(error),
+          });
+        }
+
+        await wait(retryDelay);
+      }
     }
   },
 
@@ -373,9 +484,25 @@ export const local = {
 
   currentVersion: async (name: string): Promise<string | null> => {
     const module = path.join(RunOptions.modulesDir, name);
-    const tags = await local.tagsAtHead(module);
+    const headTags = await local.tagsAtHead(module);
 
-    return versionUtil.sort(tags)[0] || null;
+    if (headTags.length) return versionUtil.sort(headTags)[0];
+
+    try {
+      /* Локальные коммиты поверх выбранного тега не меняют выбранную версию.
+       * --first-parent не позволяет тегу из влитой ветки подменить базу. */
+      const res = await execAsync(
+        // eslint-disable-next-line max-len
+        `git -C "${module}" describe --tags --abbrev=0 --first-parent --match "[0-9]*.[0-9]*.[0-9]*" HEAD`,
+        { cwd: RunOptions.cwd },
+      );
+
+      const version = res.stdout.toString().trim();
+
+      return versionUtil.validate(version) ? version : null;
+    } catch {
+      return null;
+    }
   },
 
   listTags: async (dir: string): Promise<string[]> => {
