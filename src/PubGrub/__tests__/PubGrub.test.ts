@@ -72,6 +72,18 @@ const DiamondShared = defineModule('DiamondShared', {
   '2.0.0': {},
 });
 
+const EarlyRequester = defineModule('EarlyRequester', {
+  '1.0.0': { SharedTarget: '^1.0.0' },
+});
+
+const SharedTarget = defineModule('SharedTarget', {
+  '1.0.0': {},
+});
+
+const ZLateRequester = defineModule('ZLateRequester', {
+  '1.0.0': { SharedTarget: '^1.0.0' },
+});
+
 const LazyA = defineModule('LazyA', {
   '1.0.0': { Unused: '*' },
   '2.0.0': { LazyB: '*' },
@@ -157,6 +169,9 @@ const ALL_MODULES = [
   DiamondLeft,
   DiamondRight,
   DiamondShared,
+  EarlyRequester,
+  SharedTarget,
+  ZLateRequester,
   LazyA,
   LazyB,
   Unused,
@@ -288,6 +303,32 @@ describe('PubGrub resolution', () => {
     });
   });
 
+  it('keeps a requester added after the dependency was selected', async () => {
+    const currentRoot = root
+      .add(EarlyRequester)
+      .add(ZLateRequester);
+
+    const { resolution } = await currentRoot.resolve();
+
+    expect(resolution.SharedTarget.requestedVersion).toEqual({
+      EarlyRequester: '^1.0.0',
+      ZLateRequester: '^1.0.0',
+    });
+  });
+
+  it('merges root and addon requesters from the selected graph', async () => {
+    const currentRoot = root
+      .add(SharedTarget)
+      .add(ZLateRequester);
+
+    const { resolution } = await currentRoot.resolve();
+
+    expect(resolution.SharedTarget.requestedVersion).toEqual({
+      '<root>': '*',
+      ZLateRequester: '^1.0.0',
+    });
+  });
+
   it('backtracks from an incompatible newer parent version', async () => {
     const currentRoot = root.add(BacktrackA);
     const { resolution } = await currentRoot.resolve();
@@ -295,6 +336,9 @@ describe('PubGrub resolution', () => {
     expect(selected(resolution)).toEqual({
       BacktrackA: '1.0.0',
       BacktrackB: '1.5.0',
+    });
+    expect(resolution.BacktrackB.requestedVersion).toEqual({
+      BacktrackA: '^1.0.0',
     });
   });
 
@@ -433,6 +477,10 @@ describe('PubGrub errors', () => {
     expect(selected(resolution)).toEqual({
       ConflictA: '1.0.0',
       ConflictB: '1.0.0',
+    });
+    expect(resolution.ConflictA.requestedVersion).toEqual({
+      '<root>': '^1.0.0',
+      ConflictB: '^2.0.0',
     });
     expect(resolver.getResolution()).toBe(resolution);
   });

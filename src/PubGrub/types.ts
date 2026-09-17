@@ -23,9 +23,9 @@ export interface IResolvedPackage extends IPackageEntry {
   version: string;
   dependencies: TDependencies;
   /*
-   * Кто какой диапазон запросил: '<root>' — корневой package.json,
-   * имя родителя — манифест версии родителя (resolution плоский,
-   * поэтому 'Parent@version' сворачивается до имени).
+   * Все входящие рёбра финального выбранного графа: кто какой диапазон
+   * запросил. '<root>' — корневой package.json, имя родителя — манифест
+   * его выбранной версии.
    */
   requestedVersion: Record<string, string>;
 }

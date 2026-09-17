@@ -188,9 +188,11 @@ export class PubGrub {
 
     if (!result.ok) this.errors.push(this.toError(result.conflict));
 
-    this.resolution = result.ok && !this.errors.length
-      ? this.makeResolution(result.state)
-      : this.makeResolution(await this.completeFallback(rootRequirements));
+    const finalState = result.ok && !this.errors.length
+      ? result.state
+      : await this.completeFallback(rootRequirements);
+
+    this.resolution = this.makeResolution(finalState, rootRequirements);
 
     return { resolution: this.resolution, errors: this.errors };
   };
@@ -217,51 +219,63 @@ export class PubGrub {
     this.partialState = cloneState(state);
   };
 
-  /* 'Parent@1.0.0' → 'Parent'; '<root>' и '<conflict>' остаются как есть. */
-  // eslint-disable-next-line class-methods-use-this
-  private requesterOf = (requiredBy: string): string => {
-    if (requiredBy === ROOT) return ROOT;
+  /*
+   * requestedVersion — все входящие рёбра финального выбранного графа:
+   * requester → range. Состояние requirements для этого не подходит:
+   * совместимая зависимость, добавленная после выбора её версии, не требует
+   * unit propagation и потому может отсутствовать в requirements.
+   */
+  private requestedVersionsFromGraph = (
+    state: ISolverState,
+    roots: IRootRequirement[],
+  ): Map<string, Record<string, string>> => {
+    const result = new Map<string, Record<string, string>>();
 
-    const at = requiredBy.lastIndexOf('@');
+    const add = (name: string, requester: string, range: string): void => {
+      result.set(name, {
+        ...(result.get(name) || {}),
+        [requester]: range,
+      });
+    };
 
-    return at > 0 ? requiredBy.slice(0, at) : requiredBy;
+    roots.forEach(({ entry, range }) => add(entry.name, ROOT, range));
+
+    [...state.selected]
+      .filter(([name]) => name !== ROOT)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .forEach(([requester, version]) => {
+        const dependencies = this.entries.get(requester)?.versions[version]
+          || {};
+
+        Object.entries(dependencies).forEach(([name, range]) => {
+          if (state.selected.has(name)) add(name, requester, range);
+        });
+      });
+
+    return result;
   };
 
-  /*
-   * requestedVersion — позитивные требования к модулю: requester → range.
-   * Выведенные солвером требования ('<conflict>') не привязаны
-   * к редактируемому манифесту и пропускаются.
-   */
-  private requestedVersionsOf = (
-    state: ISolverState | null,
-    name: string,
-  ): Record<string, string> => Object.fromEntries(
-    (state?.requirements.get(name) || [])
-      .filter(requirement => (
-        requirement.positive && requirement.requiredBy !== '<conflict>'
-      ))
-      .map(requirement => [
-        this.requesterOf(requirement.requiredBy),
-        requirement.range,
-      ]),
-  );
-
   private makeResolution = (
-    state: ISolverState | null,
-  ): TPubGrubResult => Object.fromEntries(
-    [...this.entries].flatMap(([name, entry]) => {
-      const version = state?.selected.get(name) || '';
+    state: ISolverState,
+    roots: IRootRequirement[],
+  ): TPubGrubResult => {
+    const requestedVersions = this.requestedVersionsFromGraph(state, roots);
 
-      if (!version) return [];
+    return Object.fromEntries(
+      [...this.entries].flatMap(([name, entry]) => {
+        const version = state.selected.get(name) || '';
 
-      return [[name, {
-        ...entry,
-        version,
-        dependencies: { ...entry.versions[version] },
-        requestedVersion: this.requestedVersionsOf(state, name),
-      }]];
-    }),
-  );
+        if (!version) return [];
+
+        return [[name, {
+          ...entry,
+          version,
+          dependencies: { ...entry.versions[version] },
+          requestedVersion: requestedVersions.get(name) || {},
+        }]];
+      }),
+    );
+  };
 
   /*
    * При несовместимом дереве PubGrub не может вернуть решение, но Version
